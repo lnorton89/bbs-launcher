@@ -1,0 +1,76 @@
+[bbs]
+title = "LAWRENCE'S BBS"
+subtitle = "Terminal Launcher v0.1"
+
+[[items]]
+key = "1"
+label = "Claude Code"
+cmd = "claude"
+desc = "AI coding assistant"
+icon = "CC"
+color = "cyan"
+
+[[items]]
+key = "2"
+label = "Neovim"
+cmd = "nvim"
+desc = "Text editor"
+icon = "NV"
+color = "green"
+
+[[items]]
+key = "3"
+label = "Kilo"
+cmd = "kilo"
+desc = "AI coding agent CLI"
+icon = "K"
+color = "magenta"
+
+[[items]]
+key = "4"
+label = "Netlify CLI"
+cmd = "netlify"
+desc = "Deploy to Netlify"
+icon = "NT"
+color = "blue"
+
+[[items]]
+key = "5"
+label = "Git Status"
+cmd = "git status"
+desc = "Check git status"
+icon = "GS"
+color = "yellow"
+
+[[items]]
+key = "6"
+label = "Lazygit"
+cmd = "lazygit"
+desc = "Git TUI"
+icon = "LG"
+color = "red"
+
+[[items]]
+key = "7"
+label = "Btop"
+cmd = "btop"
+desc = "System monitor"
+icon = "BT"
+color = "green"
+wsl = true
+
+[[items]]
+key = "8"
+label = "Python REPL"
+cmd = "python"
+desc = "Python interactive"
+icon = "PY"
+color = "yellow"
+
+[[items]]
+key = "Q"
+label = "Quit"
+cmd = "exit"
+desc = "Close launcher"
+icon = "QQ"
+color = "red"
