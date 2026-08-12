@@ -771,6 +771,27 @@ category = "Tools"
     }
 
     #[test]
+    fn hotkeys_resolve_case_insensitively_to_the_right_item() {
+        // Against the real workspace bbs.toml, so a config/binding drift
+        // (like B landing on anything but the Bluetti screen) fails CI.
+        let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("bbs.toml");
+        let (config, path) = crate::config::load_config(Some(config_path)).unwrap();
+        let app = App::new(config, path);
+
+        let item = app.find_by_key("b").expect("lowercase b resolves");
+        assert_eq!(item.label, "Bluetti");
+        assert_eq!(item.screen.as_deref(), Some("bluetti"));
+        let item = app.find_by_key("B").expect("uppercase B resolves");
+        assert_eq!(item.label, "Bluetti");
+        let item = app.find_by_key("8").unwrap();
+        assert_eq!(item.label, "Python REPL");
+        assert!(app.find_by_key("z").is_none());
+    }
+
+    #[test]
     fn menu_sort_cycles_orders_by_stats_and_keeps_the_selection() {
         let path = write_config("menu-sort", BASE);
         let mut app = app_from(&path);

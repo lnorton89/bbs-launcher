@@ -462,7 +462,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 fn draw_help(frame: &mut Frame, app: &App) {
     // Sized to the longest entry line and the full row count so nothing
     // is clipped; centered_rect clamps this to the terminal.
-    let area = centered_rect(68, 27, frame.area());
+    let area = centered_rect(68, 28, frame.area());
     frame.render_widget(Clear, area);
 
     let section = |t: &str| {
@@ -494,6 +494,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
         entry("s", "cycle sort: config · most launched · recent"),
         entry("?", "toggle this help"),
         entry("q / Esc", "quit"),
+        entry("Ctrl+L", "force a full repaint"),
         Line::default(),
         section("Screens"),
         entry("screen items", "GitHub dashboard · Bluetti power monitor"),

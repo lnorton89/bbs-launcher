@@ -64,7 +64,17 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                     }
                     dirty = true;
                 }
-                Event::Resize(..) => dirty = true,
+                Event::Resize(w, h) => {
+                    // Resize using the event's own dimensions instead of
+                    // waiting for the next draw's size query: on Windows
+                    // the query can lag the real window (fast or
+                    // one-axis resizes), which left every frame painted
+                    // at a stale width. Terminal::resize also clears, so
+                    // cells the new layout doesn't cover can't linger as
+                    // on-screen garbage.
+                    terminal.resize(ratatui::layout::Rect::new(0, 0, w, h))?;
+                    dirty = true;
+                }
                 _ => {}
             }
         }
@@ -96,6 +106,12 @@ fn handle_key<B: Backend>(
         && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('q'))
     {
         return Ok(true);
+    }
+    // The classic terminal fixer-upper: force a full repaint, in any
+    // mode, for when the display has drifted out of sync with reality.
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
+        terminal.clear()?;
+        return Ok(false);
     }
 
     match app.mode {
@@ -380,6 +396,10 @@ fn launch<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, item: &BbsItem)
         app.status_message = format!("Couldn't save stats: {}", err);
     }
 
+    // Flush any frame bytes still buffered in the backend before
+    // touching the terminal through a second handle — two interleaved
+    // write paths are a reliable source of creeping display corruption.
+    terminal.backend_mut().flush()?;
     disable_raw_mode()?;
     execute!(
         io::stdout(),
@@ -428,6 +448,11 @@ fn launch<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, item: &BbsItem)
 
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
-    terminal.clear()?;
+    // The window may have been resized while the child owned the
+    // screen — and the resize events consumed with it. Re-sync from a
+    // fresh query; Terminal::resize includes the full clear a bare
+    // clear() would have done.
+    let (w, h) = crossterm::terminal::size()?;
+    terminal.resize(ratatui::layout::Rect::new(0, 0, w, h))?;
     Ok(false)
 }
