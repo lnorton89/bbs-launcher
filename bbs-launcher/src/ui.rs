@@ -354,6 +354,40 @@ fn draw_ticker(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(ticker, area);
 }
 
+/// Splits `text` into styled runs, marking the chars whose position in
+/// the search haystack (`offset` + index within `text`) the fuzzy query
+/// matched. Matched runs keep their base colour scheme readable by
+/// switching to underlined yellow — and the underline survives even on
+/// the selected row, where the highlight bar repaints all foregrounds.
+fn highlight_runs(
+    text: &str,
+    positions: &[usize],
+    offset: usize,
+    base: Style,
+) -> Vec<Span<'static>> {
+    let matched_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let mut run_matched = false;
+    for (i, c) in text.chars().enumerate() {
+        // `positions` is built in ascending order, so binary search works.
+        let matched = positions.binary_search(&(offset + i)).is_ok();
+        if matched != run_matched && !run.is_empty() {
+            let style = if run_matched { matched_style } else { base };
+            spans.push(Span::styled(std::mem::take(&mut run), style));
+        }
+        run_matched = matched;
+        run.push(c);
+    }
+    if !run.is_empty() {
+        let style = if run_matched { matched_style } else { base };
+        spans.push(Span::styled(run, style));
+    }
+    spans
+}
+
 fn draw_menu(frame: &mut Frame, area: Rect, app: &mut App) {
     let accent = app.accent();
     // Rendered from `rows`, not `filtered`, so the row the selection
@@ -380,6 +414,9 @@ fn draw_menu(frame: &mut Frame, area: Rect, app: &mut App) {
                 let icon_color = color_from_str(&item.color);
                 // Indent items that sit under a category header.
                 let indent = if item.category.is_some() { "  " } else { "" };
+                let label_style =
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD);
+                let desc_style = Style::default().fg(Color::Gray);
                 let mut spans = vec![
                     Span::styled(
                         format!("{}[{}] ", indent, item.key),
@@ -389,15 +426,27 @@ fn draw_menu(frame: &mut Frame, area: Rect, app: &mut App) {
                         format!("{} ", item.icon),
                         Style::default().fg(icon_color).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        item.label.clone(),
-                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!(" - {}", item.desc),
-                        Style::default().fg(Color::Gray),
-                    ),
                 ];
+                // While searching, underline the chars the query hit.
+                // The positions index into "label desc cmd", so the desc
+                // starts one char (the joining space) past the label.
+                match app.match_positions.get(idx).filter(|_| !app.query.is_empty()) {
+                    Some(positions) => {
+                        spans.extend(highlight_runs(&item.label, positions, 0, label_style));
+                        spans.push(Span::styled(" - ".to_string(), desc_style));
+                        let desc_offset = item.label.chars().count() + 1;
+                        spans.extend(highlight_runs(
+                            &item.desc,
+                            positions,
+                            desc_offset,
+                            desc_style,
+                        ));
+                    }
+                    None => {
+                        spans.push(Span::styled(item.label.clone(), label_style));
+                        spans.push(Span::styled(format!(" - {}", item.desc), desc_style));
+                    }
+                }
                 if let Some(st) = app.stats.get(&item.label) {
                     if st.count > 0 {
                         spans.push(Span::styled(
@@ -901,7 +950,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
         entry("o · m · r", "open · mark read · refresh"),
         Line::default(),
         section("Config"),
-        entry("bbs.toml", "theme · banner · motd · categories · items"),
+        entry("bbs.toml", "theme · motd · items — live-reloads on save"),
         entry("stats.toml", "launch counts (~/.config/bbs-launcher)"),
         entry("--config FILE", "use a different config · --list to dump it"),
     ];

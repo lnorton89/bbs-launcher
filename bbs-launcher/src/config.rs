@@ -39,7 +39,9 @@ pub struct BbsConfig {
 }
 
 /// Customization for the built-in GitHub dashboard screen.
-#[derive(Debug, Deserialize, Clone, Default)]
+/// `PartialEq` so a live config reload can tell whether this section
+/// changed and the dashboard needs rebuilding.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
 pub struct GithubConfig {
     /// Sections to show, in display order. Defaults to all six:
     /// `notifications`, `pull_requests`, `issues`, `stars`, `gists`,

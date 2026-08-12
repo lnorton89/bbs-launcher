@@ -27,7 +27,8 @@ bbs-launcher/src/
 - ⌨️ **Keyboard-driven** - Navigate with `↑/↓` or `j/k`, select with `Enter`, quit with `q`
 - ⚡ **Instant launching** - Pick a command and it fires; you land back on the menu when it exits
 - 🔧 **TOML config** - Easy-to-edit `bbs.toml` for all your shortcuts
-- 🔍 **Fuzzy search** - Press `/` and type; `lzg` finds Lazygit
+- ♻️ **Live reload** - Save `bbs.toml` and the running menu updates itself; a broken edit is reported in the status bar instead of crashing anything
+- 🔍 **Ranked fuzzy search** - Press `/` and type; `lzg` finds Lazygit, results are ordered best-match-first, and the matched letters are highlighted
 - 🗂️ **Foldable categories** - Group items under collapsible headers
 - 📺 **Scrolling MOTD** - A marquee of your own messages under the banner
 - 📊 **Launch stats** - Remembers what you run and when
