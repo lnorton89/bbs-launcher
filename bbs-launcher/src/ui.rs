@@ -1,4 +1,4 @@
-use crate::app::{App, Mode, Row};
+use crate::app::{App, Mode, Row, Theme};
 use crate::github::SectionKind;
 use crate::stats::time_ago;
 use ratatui::{
@@ -29,6 +29,91 @@ pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
         ((g + m) * 255.0) as u8,
         ((b + m) * 255.0) as u8,
     )
+}
+
+/// True for the box-drawing glyphs ratatui uses to stroke borders. The
+/// chase recolours only these, so titles and content keep their own
+/// colours instead of being swept up in the gradient.
+fn is_border_glyph(symbol: &str) -> bool {
+    symbol
+        .chars()
+        .next()
+        .is_some_and(|c| ('\u{2500}'..='\u{257F}').contains(&c))
+}
+
+/// Degrees of hue the chase travels per tick (10 ticks/sec), i.e. one
+/// full lap of the colour wheel roughly every 12 seconds.
+const CHASE_DEGREES_PER_TICK: f32 = 3.0;
+
+/// Paints a travelling rainbow around the border of `area`, like an LED
+/// strip: hue advances with distance clockwise around the perimeter and
+/// drifts with time, so one full wheel is spread over the whole outline
+/// and adjacent cells differ by only a degree or two. A slow brightness
+/// wave rides along at the same speed, giving the light somewhere to
+/// visibly travel even across stretches where neighbouring hues are
+/// nearly identical.
+fn rainbow_chase(frame: &mut Frame, area: Rect, tick: u64, animate: bool) {
+    if area.width < 2 || area.height < 2 {
+        return;
+    }
+    let (w, h) = (area.width as u32, area.height as u32);
+    let perimeter = (2 * (w - 1) + 2 * (h - 1)) as f32;
+    let phase_deg = if animate {
+        tick as f32 * CHASE_DEGREES_PER_TICK
+    } else {
+        0.0
+    };
+    let phase_rad = phase_deg.to_radians();
+
+    let buf = frame.buffer_mut();
+    let mut paint = |x: u16, y: u16, pos: u32| {
+        let Some(cell) = buf.cell_mut((x, y)) else {
+            return;
+        };
+        if !is_border_glyph(cell.symbol()) {
+            return;
+        }
+        let t = pos as f32 / perimeter;
+        let hue = (t * 360.0 - phase_deg).rem_euclid(360.0);
+        // Stays well clear of 0 so the dim part of the wave still reads
+        // as coloured light rather than going muddy.
+        let glow = 0.68 + 0.32 * (t * std::f32::consts::TAU - phase_rad).sin();
+        let (r, g, b) = hsv_to_rgb(hue, 0.85, glow);
+        cell.set_fg(Color::Rgb(r, g, b));
+    };
+
+    // Walk the outline clockwise from the top-left so `pos` measures
+    // distance travelled along the strip.
+    let (x0, y0) = (area.x, area.y);
+    let (x1, y1) = (area.x + area.width - 1, area.y + area.height - 1);
+    let mut pos = 0;
+    for x in x0..=x1 {
+        paint(x, y0, pos);
+        pos += 1;
+    }
+    for y in (y0 + 1)..=y1 {
+        paint(x1, y, pos);
+        pos += 1;
+    }
+    for x in (x0..x1).rev() {
+        paint(x, y1, pos);
+        pos += 1;
+    }
+    for y in ((y0 + 1)..y1).rev() {
+        paint(x0, y, pos);
+        pos += 1;
+    }
+}
+
+/// Applies the chase to every bordered pane when the rainbow theme is
+/// active; a no-op for solid themes.
+fn apply_chase(frame: &mut Frame, app: &App, areas: &[Rect]) {
+    if app.theme != Theme::Rainbow {
+        return;
+    }
+    for area in areas {
+        rainbow_chase(frame, *area, app.tick, app.animate);
+    }
 }
 
 pub fn color_from_str(s: &str) -> Color {
@@ -100,6 +185,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_status(frame, chunks[3], app);
     draw_footer(frame, chunks[4], app);
 
+    // After the panes are drawn, so the chase overwrites their border
+    // colours rather than being overwritten by them.
+    apply_chase(frame, app, &[chunks[0], mid[0], mid[1]]);
+
     if app.mode == Mode::Help {
         draw_help(frame, app);
     }
@@ -107,6 +196,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 fn draw_banner(frame: &mut Frame, area: Rect, app: &App) {
     let (br, bg, bb) = theme_rgb(app.accent());
+    let rainbow = app.theme == Theme::Rainbow;
     let animate = app.config.bbs.banner_animation.unwrap_or(true);
     let phase = if animate { app.tick as f32 * 0.12 } else { 0.0 };
 
@@ -125,15 +215,27 @@ fn draw_banner(frame: &mut Frame, area: Rect, app: &App) {
                     // Diagonal brightness wave across the letterforms.
                     let f = 0.55
                         + 0.45 * (col as f32 * 0.06 + row as f32 * 0.4 - phase).sin();
+                    let color = if rainbow {
+                        // Spread the wheel across the letterforms so the
+                        // banner carries a gradient of its own, instead
+                        // of every glyph sharing one shifting tint. The
+                        // brightness floor keeps colours vivid where the
+                        // wave dips.
+                        let hue = (col as f32 * 2.4 + row as f32 * 7.0
+                            - phase * 14.0)
+                            .rem_euclid(360.0);
+                        let (r, g, b) = hsv_to_rgb(hue, 0.85, f.clamp(0.5, 1.0));
+                        Color::Rgb(r, g, b)
+                    } else {
+                        Color::Rgb(
+                            (br as f32 * f) as u8,
+                            (bg as f32 * f) as u8,
+                            (bb as f32 * f) as u8,
+                        )
+                    };
                     Span::styled(
                         c.to_string(),
-                        Style::default()
-                            .fg(Color::Rgb(
-                                (br as f32 * f) as u8,
-                                (bg as f32 * f) as u8,
-                                (bb as f32 * f) as u8,
-                            ))
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
                     )
                 })
                 .collect();
@@ -537,6 +639,7 @@ fn draw_github(frame: &mut Frame, app: &mut App) {
         .split(chunks[2]);
     draw_github_list(frame, mid[0], app);
     draw_github_details(frame, mid[1], app);
+    apply_chase(frame, app, &[chunks[0], mid[0], mid[1]]);
 
     // ── footer: key hints ──
     let hints = if app.github.sections[app.github.tab] == SectionKind::Notifications {
@@ -749,6 +852,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
     );
 
     frame.render_widget(help, area);
+    apply_chase(frame, app, &[area]);
 }
 
 fn centered_rect(width: u16, height: u16, r: Rect) -> Rect {
@@ -922,6 +1026,126 @@ mod tests {
                 row.trim_end()
             );
         }
+    }
+
+    /// Reads the fg colours of a pane's border cells, walking clockwise
+    /// from the top-left corner. Each entry carries its distance along
+    /// the perimeter, because a title interrupts the run of border
+    /// glyphs and the cells either side of it are not neighbours.
+    fn border_colors(app: &mut App, area: Rect) -> Vec<(u32, (u8, u8, u8))> {
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 32)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let (x0, y0) = (area.x, area.y);
+        let (x1, y1) = (area.x + area.width - 1, area.y + area.height - 1);
+        let mut coords: Vec<(u16, u16)> = Vec::new();
+        coords.extend((x0..=x1).map(|x| (x, y0)));
+        coords.extend(((y0 + 1)..=y1).map(|y| (x1, y)));
+        coords.extend((x0..x1).rev().map(|x| (x, y1)));
+        coords.extend(((y0 + 1)..y1).rev().map(|y| (x0, y)));
+        coords
+            .into_iter()
+            .enumerate()
+            .filter(|&(_, (x, y))| is_border_glyph(buf[(x, y)].symbol()))
+            .filter_map(|(pos, (x, y))| match buf[(x, y)].fg {
+                Color::Rgb(r, g, b) => Some((pos as u32, (r, g, b))),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rainbow_chase_is_a_smooth_travelling_gradient() {
+        use crate::app::Theme;
+        // The menu pane, per the layout in `draw`.
+        let area = Rect::new(0, 9, 68, 20);
+
+        let mut app = test_app();
+        app.theme = Theme::Rainbow;
+        app.animate = true;
+
+        let colors = border_colors(&mut app, area);
+        assert!(colors.len() > 50, "expected a full border of cells");
+
+        // Diffused, not banded: cells that really are adjacent stay
+        // close in colour, all the way around including the corners.
+        let step = |a: (u8, u8, u8), b: (u8, u8, u8)| {
+            (a.0 as i32 - b.0 as i32).abs().max(
+                (a.1 as i32 - b.1 as i32)
+                    .abs()
+                    .max((a.2 as i32 - b.2 as i32).abs()),
+            )
+        };
+        let adjacent: Vec<i32> = colors
+            .windows(2)
+            .filter(|w| w[1].0 == w[0].0 + 1)
+            .map(|w| step(w[0].1, w[1].1))
+            .collect();
+        assert!(adjacent.len() > 40, "expected long unbroken runs of border");
+        let biggest = *adjacent.iter().max().unwrap();
+        assert!(
+            biggest <= 20,
+            "gradient should be gradual, but adjacent cells jumped by {biggest}"
+        );
+
+        // Rainbow, not monochrome: the whole wheel is represented.
+        let distinct = colors
+            .iter()
+            .map(|(_, c)| c)
+            .collect::<std::collections::HashSet<_>>();
+        assert!(
+            distinct.len() > 20,
+            "expected many hues around the border, got {}",
+            distinct.len()
+        );
+
+        // It travels: the same cells are lit differently a few ticks on.
+        const TICKS: u64 = 12;
+        for _ in 0..TICKS {
+            app.on_tick();
+        }
+        let later = border_colors(&mut app, area);
+        assert_ne!(colors, later, "the chase should move over time");
+
+        // And it travels as a chase — the whole pattern slides clockwise
+        // by a predictable distance rather than every cell recolouring
+        // independently. After TICKS, the light at position p is what
+        // used to be at p - shift.
+        let perimeter = f32::from(2 * (area.width - 1) + 2 * (area.height - 1));
+        let shift =
+            (TICKS as f32 * CHASE_DEGREES_PER_TICK / 360.0 * perimeter).round() as u32;
+        assert!(shift > 0, "the test needs enough ticks to move the pattern");
+
+        let earlier: std::collections::HashMap<u32, (u8, u8, u8)> =
+            colors.iter().copied().collect();
+        let mut compared = 0;
+        let mut worst = 0;
+        for (pos, c) in &later {
+            let Some(prev) = pos.checked_sub(shift).and_then(|p| earlier.get(&p)) else {
+                continue;
+            };
+            worst = worst.max(step(*c, *prev));
+            compared += 1;
+        }
+        assert!(compared > 30, "expected plenty of overlap to compare");
+        assert!(
+            worst <= 25,
+            "pattern should have slid {shift} cells clockwise, but a cell \
+             differed from its predecessor by {worst}"
+        );
+    }
+
+    #[test]
+    fn solid_themes_keep_a_plain_border() {
+        let area = Rect::new(0, 9, 68, 20);
+        let mut app = test_app();
+        app.theme = crate::app::Theme::Solid(Color::Cyan);
+        // A solid theme leaves borders on their named colour, so no cell
+        // carries an Rgb fg from the chase.
+        assert!(
+            border_colors(&mut app, area).is_empty(),
+            "the chase must not run for solid themes"
+        );
     }
 
     #[test]

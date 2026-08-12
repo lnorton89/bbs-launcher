@@ -233,8 +233,19 @@ theme = "rainbow"           # or e.g. "cyan"
 banner_animation = true     # slow shimmer; false = static accent
 ```
 
-With `rainbow`, the banner, borders, tabs, and selection highlight all walk
-the hue wheel together (one slow full cycle roughly every 15 seconds).
+With `rainbow`, the accent walks the hue wheel and two extra effects kick
+in:
+
+- **Border chase** — every bordered pane gets a travelling gradient, like
+  an LED strip. One full turn of the colour wheel is spread around each
+  outline, so neighbouring cells differ by only a degree or two, and the
+  whole pattern slides clockwise (a lap roughly every 12 seconds). A soft
+  brightness wave rides along with it so the light visibly moves even
+  across stretches where the hues are nearly identical.
+- **Banner gradient** — the block letters carry the wheel across
+  themselves rather than all sharing one tint.
+
+Set `banner_animation = false` to freeze both into a static gradient.
 
 ## GitHub Dashboard
 

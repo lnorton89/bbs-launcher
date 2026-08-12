@@ -32,10 +32,10 @@ category = "Develop"
 
 [[items]]
 key = "2"
-label = "Neovim"
-cmd = "nvim"
-desc = "Text editor"
-icon = "NV"
+label = "Freebuff"
+cmd = "freebuff"
+desc = "AI coding assistant"
+icon = "FB"
 color = "green"
 category = "Develop"
 
