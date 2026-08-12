@@ -1,6 +1,6 @@
-use crate::bluetti::BluettiView;
+use crate::screens::bluetti::BluettiView;
 use crate::config::{BbsConfig, BbsItem};
-use crate::github::GithubView;
+use crate::screens::github::GithubView;
 use crate::stats::Stats;
 use crate::ui::{color_from_str, hsv_to_rgb};
 use ratatui::{layout::Rect, style::Color, widgets::ListState};
@@ -56,6 +56,46 @@ pub enum Row {
     Item(usize),
 }
 
+/// How menu items are ordered within their category. Cycled with `s`;
+/// the starting order comes from the config (`menu_sort`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MenuSort {
+    /// The order items appear in bbs.toml.
+    #[default]
+    Config,
+    /// Highest launch count first.
+    Launches,
+    /// Most recently launched first.
+    Recent,
+}
+
+impl MenuSort {
+    pub fn parse(s: &str) -> Option<MenuSort> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "config" | "manual" => Some(MenuSort::Config),
+            "launches" | "count" | "most_used" => Some(MenuSort::Launches),
+            "recent" | "recency" | "last_used" => Some(MenuSort::Recent),
+            _ => None,
+        }
+    }
+
+    fn next(self) -> MenuSort {
+        match self {
+            MenuSort::Config => MenuSort::Launches,
+            MenuSort::Launches => MenuSort::Recent,
+            MenuSort::Recent => MenuSort::Config,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MenuSort::Config => "config order",
+            MenuSort::Launches => "most launched",
+            MenuSort::Recent => "recently used",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct App {
     pub config: BbsConfig,
@@ -77,6 +117,8 @@ pub struct App {
     /// from `filtered` and `collapsed`. `state` selects within this.
     pub rows: Vec<Row>,
     pub collapsed: HashSet<String>,
+    /// Active in-category ordering of menu items.
+    pub menu_sort: MenuSort,
     pub stats: Stats,
     pub tick: u64,
     pub theme: Theme,
@@ -128,6 +170,7 @@ impl App {
             match_positions: HashMap::new(),
             rows: Vec::new(),
             collapsed: HashSet::new(),
+            menu_sort: MenuSort::default(),
             stats: Stats::load(),
             tick: 0,
             theme: Theme::Solid(Color::Cyan),
@@ -180,6 +223,13 @@ impl App {
             .unwrap_or(DEFAULT_CHASE_LAP_SECS);
         self.chase_degrees_per_tick = 360.0 / (chase_lap_secs * TICKS_PER_SEC);
         self.chase = self.config.bbs.border_chase.unwrap_or(true);
+        self.menu_sort = self
+            .config
+            .bbs
+            .menu_sort
+            .as_deref()
+            .and_then(MenuSort::parse)
+            .unwrap_or_default();
         // Blank/whitespace-only entries are dropped so a stray empty
         // string in the config can't produce a row of dead space.
         self.motd = self.config.bbs.motd.as_ref().and_then(|lines| {
@@ -291,6 +341,20 @@ impl App {
         let cur = self.state.selected().unwrap_or(0) as i64;
         let next = (cur + delta).clamp(0, len - 1);
         self.state.select(Some(next as usize));
+    }
+
+    /// Records a click on row `idx` and reports whether it completed a
+    /// double-click (second click on an already-selected row within the
+    /// double-click window).
+    pub fn register_click(&mut self, idx: usize, was_selected: bool) -> bool {
+        let now = Instant::now();
+        let is_double = was_selected
+            && self.last_click.take().is_some_and(|(t, i)| {
+                i == idx
+                    && now.duration_since(t) < std::time::Duration::from_millis(450)
+            });
+        self.last_click = Some((now, idx));
+        is_double
     }
 
     pub fn selected_row(&self) -> Option<&Row> {
@@ -432,17 +496,19 @@ impl App {
                     count: members.len(),
                 });
                 if !self.collapsed.contains(cat) {
-                    self.rows.extend(members.into_iter().map(Row::Item));
+                    self.rows
+                        .extend(self.order_by_menu_sort(members).into_iter().map(Row::Item));
                 }
             }
             // Uncategorized items go last, ungrouped.
-            self.rows.extend(
-                self.filtered
-                    .iter()
-                    .copied()
-                    .filter(|&i| self.items[i].category.is_none())
-                    .map(Row::Item),
-            );
+            let loose: Vec<usize> = self
+                .filtered
+                .iter()
+                .copied()
+                .filter(|&i| self.items[i].category.is_none())
+                .collect();
+            self.rows
+                .extend(self.order_by_menu_sort(loose).into_iter().map(Row::Item));
         } else {
             self.rows = self.filtered.iter().map(|&i| Row::Item(i)).collect();
         }
@@ -456,6 +522,41 @@ impl App {
             // Fresh search: jump to the first (best) match.
             self.state.select(Some(0));
         }
+    }
+
+    /// Reorders item indices for display according to the active menu
+    /// sort. Stable, so equal keys keep config order; items that have
+    /// never been launched sink below launched ones under both stats
+    /// sorts.
+    fn order_by_menu_sort(&self, mut indices: Vec<usize>) -> Vec<usize> {
+        match self.menu_sort {
+            MenuSort::Config => {}
+            MenuSort::Launches => indices.sort_by_key(|&i| {
+                std::cmp::Reverse(
+                    self.stats.get(&self.items[i].label).map(|s| s.count).unwrap_or(0),
+                )
+            }),
+            MenuSort::Recent => indices.sort_by_key(|&i| {
+                std::cmp::Reverse(
+                    self.stats
+                        .get(&self.items[i].label)
+                        .and_then(|s| s.last_launched)
+                        .unwrap_or(0),
+                )
+            }),
+        }
+        indices
+    }
+
+    /// Steps to the next menu sort, keeping the cursor on the same item.
+    pub fn cycle_menu_sort(&mut self) {
+        let selected = self.selected_item().map(|i| i.label.clone());
+        self.menu_sort = self.menu_sort.next();
+        self.rebuild_rows();
+        if let Some(label) = selected {
+            self.select_label(&label);
+        }
+        self.status_message = format!("menu sorted by {}", self.menu_sort.label());
     }
 
     pub fn on_tick(&mut self) {
@@ -667,6 +768,62 @@ category = "Tools"
         assert!(app.collapsed.is_empty(), "stale fold state is pruned");
         assert_eq!(app.items.len(), 2);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn menu_sort_cycles_orders_by_stats_and_keeps_the_selection() {
+        let path = write_config("menu-sort", BASE);
+        let mut app = app_from(&path);
+        let labels = |app: &App| {
+            app.rows
+                .iter()
+                .filter_map(|r| match r {
+                    Row::Item(i) => Some(app.items[*i].label.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(app.menu_sort, MenuSort::Config);
+        assert_eq!(labels(&app), ["Alpha", "Beta"]);
+
+        // Beta is the only launched item, so "most launched" leads with
+        // it — and the cursor stays on the item it was on.
+        app.stats.record("Beta");
+        app.select_label("Beta");
+        app.cycle_menu_sort();
+        assert_eq!(app.menu_sort, MenuSort::Launches);
+        assert_eq!(labels(&app), ["Beta", "Alpha"]);
+        assert_eq!(
+            app.selected_item().map(|i| i.label.clone()),
+            Some("Beta".into())
+        );
+        assert!(app.status_message.contains("most launched"));
+
+        // Recent: Alpha's launch is newer, so it leads.
+        app.stats.record("Alpha");
+        app.stats.items.get_mut("Alpha").unwrap().last_launched =
+            Some(crate::stats::now_secs() + 1_000);
+        app.cycle_menu_sort();
+        assert_eq!(app.menu_sort, MenuSort::Recent);
+        assert_eq!(labels(&app), ["Alpha", "Beta"]);
+
+        // And the cycle wraps back to config order.
+        app.cycle_menu_sort();
+        assert_eq!(app.menu_sort, MenuSort::Config);
+        assert_eq!(labels(&app), ["Alpha", "Beta"]);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn menu_sort_starting_order_comes_from_the_config() {
+        let body = BASE.replace("title = \"T\"", "title = \"T\"\nmenu_sort = \"launches\"");
+        let path = write_config("menu-sort-config", &body);
+        let app = app_from(&path);
+        assert_eq!(app.menu_sort, MenuSort::Launches);
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(MenuSort::parse("recent"), Some(MenuSort::Recent));
+        assert_eq!(MenuSort::parse("wat"), None);
     }
 
     #[test]

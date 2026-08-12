@@ -1,6 +1,6 @@
 use crate::app::{App, Mode, Row};
 use crate::config::BbsItem;
-use crate::github::{self, Nav};
+use crate::screens::{bluetti, github, Nav};
 use crate::ui::draw;
 use anyhow::{Context, Result};
 use crossterm::{
@@ -110,18 +110,13 @@ fn handle_key<B: Backend>(
             }
             Nav::Stay => Ok(false),
         },
-        Mode::Bluetti => {
-            match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => app.mode = Mode::Normal,
-                KeyCode::Down | KeyCode::Char('j') => app.bluetti.next(),
-                KeyCode::Up | KeyCode::Char('k') => app.bluetti.previous(),
-                KeyCode::Left | KeyCode::Char('h') => app.bluetti.prev_tab(),
-                KeyCode::Right | KeyCode::Char('l') => app.bluetti.next_tab(),
-                KeyCode::Char('r') => app.bluetti.reconnect(),
-                _ => {}
+        Mode::Bluetti => match bluetti::handle_key(app, key) {
+            Nav::Back => {
+                app.mode = Mode::Normal;
+                Ok(false)
             }
-            Ok(false)
-        }
+            Nav::Stay => Ok(false),
+        },
         Mode::Search => match key.code {
             KeyCode::Esc => {
                 app.query.clear();
@@ -206,6 +201,12 @@ fn handle_key<B: Backend>(
                 app.mode = Mode::Help;
                 Ok(false)
             }
+            // Cycles the menu order. This shadows `s` as an item hotkey;
+            // such items can still be launched with Enter or search.
+            KeyCode::Char('s') => {
+                app.cycle_menu_sort();
+                Ok(false)
+            }
             KeyCode::Enter => {
                 // On a category header, Enter folds instead of launching.
                 if app.toggle_selected_category() {
@@ -264,104 +265,106 @@ fn activate_item<B: Backend>(
     }
 }
 
+/// Which visible row of a bordered list pane a click landed on, given
+/// the list's scroll `offset` and row count. `None` for clicks on the
+/// border, outside the pane, or past the last row.
+fn clicked_row(
+    area: Option<ratatui::layout::Rect>,
+    mouse: &MouseEvent,
+    offset: usize,
+    len: usize,
+) -> Option<usize> {
+    let area = area?;
+    let inside = mouse.column > area.x
+        && mouse.column < area.x + area.width.saturating_sub(1)
+        && mouse.row > area.y
+        && mouse.row < area.y + area.height.saturating_sub(1);
+    if !inside {
+        return None;
+    }
+    let idx = (mouse.row - area.y - 1) as usize + offset;
+    (idx < len).then_some(idx)
+}
+
 /// Handles a mouse event. Returns Ok(true) when the app should quit.
 fn handle_mouse<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     mouse: MouseEvent,
 ) -> Result<bool> {
-    if app.mode == Mode::Github {
-        return handle_github_mouse(app, mouse);
-    }
-    if app.mode == Mode::Bluetti {
-        match mouse.kind {
-            MouseEventKind::ScrollDown => app.bluetti.next(),
-            MouseEventKind::ScrollUp => app.bluetti.previous(),
-            _ => {}
-        }
-        return Ok(false);
-    }
-    match mouse.kind {
-        MouseEventKind::ScrollDown => app.next(),
-        MouseEventKind::ScrollUp => app.previous(),
-        MouseEventKind::Down(MouseButton::Left) => {
-            if app.mode == Mode::Help {
-                app.mode = Mode::Normal;
-                return Ok(false);
-            }
-            let Some(area) = app.menu_area else {
-                return Ok(false);
-            };
-            // Only rows inside the menu's borders count.
-            let inside = mouse.column > area.x
-                && mouse.column < area.x + area.width.saturating_sub(1)
-                && mouse.row > area.y
-                && mouse.row < area.y + area.height.saturating_sub(1);
-            if inside {
-                let idx = (mouse.row - area.y - 1) as usize + app.state.offset();
-                if idx < app.rows.len() {
-                    let was_selected = app.state.selected() == Some(idx);
-                    let now = Instant::now();
-                    let is_double = was_selected
-                        && app.last_click.take().is_some_and(|(t, i)| {
-                            i == idx && now.duration_since(t) < Duration::from_millis(450)
-                        });
-                    app.state.select(Some(idx));
-                    app.last_click = Some((now, idx));
-                    // A single click on a category header folds it; items
-                    // still need a double-click to launch.
-                    if matches!(app.rows.get(idx), Some(Row::Header { .. })) {
-                        app.toggle_category_at(idx);
-                    } else if is_double {
-                        if let Some(item) = app.selected_item().cloned() {
-                            return activate_item(terminal, app, &item);
+    match app.mode {
+        Mode::Github => {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => app.github.next(),
+                MouseEventKind::ScrollUp => app.github.previous(),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let tab = app.github.tab;
+                    let len = app.github.entries.get(tab).map(|e| e.len()).unwrap_or(0);
+                    let offset = app.github.states[tab].offset();
+                    if let Some(idx) =
+                        clicked_row(app.github.list_area, &mouse, offset, len)
+                    {
+                        let was = app.github.states[tab].selected() == Some(idx);
+                        app.github.states[tab].select(Some(idx));
+                        // A double-click opens the entry in the browser.
+                        if app.register_click(idx, was) {
+                            app.github.open_selected();
                         }
                     }
                 }
+                _ => {}
             }
+            Ok(false)
         }
-        _ => {}
-    }
-    Ok(false)
-}
-
-/// Mouse handling while the GitHub screen is open: scroll moves the
-/// list, a click selects, a double-click opens in the browser.
-fn handle_github_mouse(app: &mut App, mouse: MouseEvent) -> Result<bool> {
-    match mouse.kind {
-        MouseEventKind::ScrollDown => app.github.next(),
-        MouseEventKind::ScrollUp => app.github.previous(),
-        MouseEventKind::Down(MouseButton::Left) => {
-            let Some(area) = app.github.list_area else {
-                return Ok(false);
-            };
-            let inside = mouse.column > area.x
-                && mouse.column < area.x + area.width.saturating_sub(1)
-                && mouse.row > area.y
-                && mouse.row < area.y + area.height.saturating_sub(1);
-            if inside {
-                let tab = app.github.tab;
-                let offset = app.github.states[tab].offset();
-                let idx = (mouse.row - area.y - 1) as usize + offset;
-                let len = app.github.entries.get(tab).map(|e| e.len()).unwrap_or(0);
-                if idx < len {
-                    let was_selected = app.github.states[tab].selected() == Some(idx);
-                    let now = Instant::now();
-                    let is_double = was_selected
-                        && app.last_click.take().is_some_and(|(t, i)| {
-                            i == idx && now.duration_since(t) < Duration::from_millis(450)
-                        });
-                    app.github.states[tab].select(Some(idx));
-                    app.last_click = Some((now, idx));
-                    if is_double {
-                        app.github.open_selected();
+        Mode::Bluetti => {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => app.bluetti.next(),
+                MouseEventKind::ScrollUp => app.bluetti.previous(),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let len = app.bluetti.sorted_fields().len();
+                    let offset = app.bluetti.state.offset();
+                    if let Some(idx) =
+                        clicked_row(app.bluetti.list_area, &mouse, offset, len)
+                    {
+                        app.bluetti.state.select(Some(idx));
                     }
                 }
+                _ => {}
             }
+            Ok(false)
         }
-        _ => {}
+        _ => {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => app.next(),
+                MouseEventKind::ScrollUp => app.previous(),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if app.mode == Mode::Help {
+                        app.mode = Mode::Normal;
+                        return Ok(false);
+                    }
+                    let offset = app.state.offset();
+                    if let Some(idx) =
+                        clicked_row(app.menu_area, &mouse, offset, app.rows.len())
+                    {
+                        let was = app.state.selected() == Some(idx);
+                        app.state.select(Some(idx));
+                        let is_double = app.register_click(idx, was);
+                        // A single click on a category header folds it;
+                        // items still need a double-click to launch.
+                        if matches!(app.rows.get(idx), Some(Row::Header { .. })) {
+                            app.toggle_category_at(idx);
+                        } else if is_double {
+                            if let Some(item) = app.selected_item().cloned() {
+                                return activate_item(terminal, app, &item);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            Ok(false)
+        }
     }
-    Ok(false)
 }
 
 /// Suspends the TUI, runs the item's command, then restores the menu.

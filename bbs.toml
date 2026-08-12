@@ -17,6 +17,10 @@ border_chase = true
 # Seconds for the chase to travel one full lap of a pane. Lower is
 # faster. Clamped to 0.5-600; default 12.
 chase_lap_secs = 12.0
+# Starting in-category order of menu items: config (default), launches
+# (most launched first), or recent (most recently launched first).
+# Press `s` in the menu to cycle through them live.
+# menu_sort = "config"
 # Scrolling message-of-the-day ticker under the banner. Remove or empty
 # this list to hide the ticker row entirely.
 motd = [

@@ -1,7 +1,6 @@
 mod app;
-mod bluetti;
+mod screens;
 mod config;
-mod github;
 mod run;
 mod stats;
 mod ui;

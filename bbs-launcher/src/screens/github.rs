@@ -11,6 +11,7 @@
 
 use crate::app::App;
 use crate::config::GithubConfig;
+use super::Nav;
 use anyhow::{bail, Context, Result};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{layout::Rect, widgets::ListState};
@@ -579,13 +580,6 @@ impl GithubView {
         }
         self.status = format!("repos sorted by {}", self.repo_sort.label());
     }
-}
-
-/// Result of handling one key while the GitHub screen is open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Nav {
-    Stay,
-    Back,
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> Nav {

@@ -12,9 +12,12 @@
 //! happens on a background thread that posts parsed updates through an
 //! mpsc channel; the main loop drains it every tick.
 
+use super::Nav;
+use crate::app::App;
 use crate::config::BluettiConfig;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{layout::Rect, widgets::ListState};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,6 +36,15 @@ const READ_TIMEOUT: Duration = Duration::from_secs(20);
 /// visible as stale data rather than lying with confident numbers.
 pub const STALE_AFTER: Duration = Duration::from_secs(60);
 
+/// How often a (battery %, net W) sample lands in the history buffer.
+const SAMPLE_EVERY: Duration = Duration::from_secs(5);
+
+/// Samples kept per device (60 × 5s = five minutes of trend).
+const HISTORY_CAP: usize = 60;
+
+/// The second `t` press must land within this window to fire a toggle.
+const TOGGLE_CONFIRM: Duration = Duration::from_secs(3);
+
 /// Messages from the subscriber thread back to the UI.
 struct Msg {
     /// Subscriber-thread generation; stale threads' messages (after a
@@ -47,6 +59,8 @@ enum MsgKind {
     /// A raw state publish; the view splits the topic against its
     /// configured prefix (the socket thread doesn't know it).
     Publish { topic: String, value: String },
+    /// One-line outcome of a fire-and-forget action (switch toggle).
+    Notice(String),
 }
 
 /// One live field value and when it last changed.
@@ -70,6 +84,12 @@ pub struct BluettiView {
     pub devices: Vec<String>,
     /// device id -> field name -> live value.
     pub fields: BTreeMap<String, BTreeMap<String, Field>>,
+    /// device id -> rolling (battery %, net W) samples for the trend
+    /// sparklines, newest last.
+    pub history: BTreeMap<String, VecDeque<(f64, f64)>>,
+    last_sample: Instant,
+    /// Armed switch toggle waiting for its confirming second press.
+    pending_toggle: Option<(String, Instant)>,
     pub tab: usize,
     pub state: ListState,
     pub status: String,
@@ -107,6 +127,9 @@ impl BluettiView {
             device_filter,
             devices: Vec::new(),
             fields: BTreeMap::new(),
+            history: BTreeMap::new(),
+            last_sample: Instant::now(),
+            pending_toggle: None,
             tab: 0,
             state: ListState::default(),
             status: "not connected".into(),
@@ -178,6 +201,9 @@ impl BluettiView {
                     self.connected = false;
                     self.status = err;
                 }
+                MsgKind::Notice(text) => {
+                    self.status = text;
+                }
                 MsgKind::Publish { topic, value } => {
                     let Some((device, field)) = split_state_topic(&topic, &self.prefix)
                     else {
@@ -204,6 +230,90 @@ impl BluettiView {
                         },
                     );
                 }
+            }
+        }
+        self.sample_history();
+    }
+
+    /// Once per [`SAMPLE_EVERY`], snapshots each device's battery and
+    /// net power into the rolling history behind the trend sparklines.
+    fn sample_history(&mut self) {
+        if self.last_sample.elapsed() < SAMPLE_EVERY {
+            return;
+        }
+        self.last_sample = Instant::now();
+        for device in &self.devices {
+            let Some(fields) = self.fields.get(device) else {
+                continue;
+            };
+            let num = |name: &str| {
+                fields
+                    .get(name)
+                    .and_then(|f| f.value.parse::<f64>().ok())
+                    .unwrap_or(0.0)
+            };
+            let battery = num("total_battery_percent");
+            let net = num("ac_input_power") + num("dc_input_power")
+                - num("ac_output_power")
+                - num("dc_output_power");
+            let hist = self.history.entry(device.clone()).or_default();
+            hist.push_back((battery, net));
+            if hist.len() > HISTORY_CAP {
+                hist.pop_front();
+            }
+        }
+    }
+
+    /// The field the cursor is on, in display order.
+    pub fn selected_field(&self) -> Option<(&str, &Field)> {
+        let idx = self.state.selected()?;
+        self.sorted_fields().into_iter().nth(idx)
+    }
+
+    /// Toggles the selected output switch over the bridge's command
+    /// topic (`<prefix>/command/<device>/<field>`, payload `ON`/`OFF`).
+    /// Because this flips real hardware, the first press only arms the
+    /// toggle; a second press within [`TOGGLE_CONFIRM`] fires it.
+    pub fn toggle_selected(&mut self) {
+        let Some(device) = self.current_device().map(str::to_string) else {
+            return;
+        };
+        let Some((name, field)) = self.selected_field() else {
+            return;
+        };
+        let target = match field.value.as_str() {
+            "ON" => "OFF",
+            "OFF" => "ON",
+            _ => {
+                self.status = format!("{} isn't a switch", field_label(name));
+                self.pending_toggle = None;
+                return;
+            }
+        };
+        let name = name.to_string();
+        match self.pending_toggle.take() {
+            Some((armed, at)) if armed == name && at.elapsed() < TOGGLE_CONFIRM => {
+                let topic = format!("{}/command/{}/{}", self.prefix, device, name);
+                let addr = self.addr.clone();
+                let tx = self.tx.clone();
+                let gen = self.generation;
+                let label = field_label(&name);
+                let payload = target.to_string();
+                self.status = format!("switching {label} {payload}…");
+                // Fire-and-forget over its own short-lived connection so
+                // the subscriber socket stays a pure receiver.
+                std::thread::spawn(move || {
+                    let kind = match publish_once(&addr, &topic, payload.as_bytes()) {
+                        Ok(()) => MsgKind::Notice(format!("{label} {payload} sent")),
+                        Err(e) => MsgKind::Notice(format!("toggle failed: {e}")),
+                    };
+                    let _ = tx.send(Msg { gen, kind });
+                });
+            }
+            _ => {
+                self.status =
+                    format!("press t again to switch {} {}", field_label(&name), target);
+                self.pending_toggle = Some((name, Instant::now()));
             }
         }
     }
@@ -260,6 +370,21 @@ impl BluettiView {
             self.state.select(Some(0));
         }
     }
+}
+
+/// Handles one key while the Bluetti screen is open.
+pub fn handle_key(app: &mut App, key: KeyEvent) -> Nav {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => return Nav::Back,
+        KeyCode::Down | KeyCode::Char('j') => app.bluetti.next(),
+        KeyCode::Up | KeyCode::Char('k') => app.bluetti.previous(),
+        KeyCode::Left | KeyCode::Char('h') => app.bluetti.prev_tab(),
+        KeyCode::Right | KeyCode::Char('l') => app.bluetti.next_tab(),
+        KeyCode::Char('r') => app.bluetti.reconnect(),
+        KeyCode::Char('t') => app.bluetti.toggle_selected(),
+        _ => {}
+    }
+    Nav::Stay
 }
 
 // ───────────────────────── field presentation ─────────────────────────
@@ -503,8 +628,39 @@ fn encode_subscribe(topic: &str) -> Vec<u8> {
     packet(0x82, body)
 }
 
+fn encode_publish(topic: &str, payload: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    push_str(&mut body, topic);
+    body.extend_from_slice(payload);
+    packet(0x30, body) // QoS 0
+}
+
 fn encode_pingreq() -> Vec<u8> {
     vec![0xC0, 0x00]
+}
+
+/// One-shot publisher for command topics: fresh connection, CONNECT,
+/// single QoS 0 PUBLISH, DISCONNECT. Stateless on purpose — the
+/// long-lived subscriber socket stays a pure receiver.
+fn publish_once(addr: &str, topic: &str, payload: &[u8]) -> io::Result<()> {
+    let sock_addr = addr
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no address"))?;
+    let mut stream = TcpStream::connect_timeout(&sock_addr, Duration::from_secs(5))?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let client_id = format!("bbs-launcher-cmd-{}", std::process::id());
+    stream.write_all(&encode_connect(&client_id))?;
+    let (header, body) = read_packet(&mut stream)?;
+    if header >> 4 != 2 || body.len() < 2 || body[1] != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            "broker refused connection",
+        ));
+    }
+    stream.write_all(&encode_publish(topic, payload))?;
+    stream.write_all(&[0xE0, 0x00])?; // DISCONNECT
+    stream.flush()
 }
 
 fn encode_puback(pid: u16) -> Vec<u8> {
@@ -642,6 +798,117 @@ mod tests {
             b // missing the packet id
         })
         .is_none());
+    }
+
+    fn field(value: &str) -> Field {
+        Field {
+            value: value.into(),
+            updated: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn history_samples_battery_and_net_power_on_a_timer() {
+        let mut view = BluettiView::new(None);
+        view.devices.push("AC500-1".into());
+        let fields = view.fields.entry("AC500-1".into()).or_default();
+        for (name, value) in [
+            ("total_battery_percent", "33"),
+            ("ac_input_power", "100"),
+            ("dc_input_power", "0"),
+            ("ac_output_power", "241"),
+            ("dc_output_power", "9"),
+        ] {
+            fields.insert(name.into(), field(value));
+        }
+        // Not due yet: no sample.
+        view.poll();
+        assert!(!view.history.contains_key("AC500-1"));
+
+        // Due: one (battery, net) sample lands.
+        view.last_sample = Instant::now() - SAMPLE_EVERY;
+        view.poll();
+        let hist = view.history.get("AC500-1").unwrap();
+        assert_eq!(hist.len(), 1);
+        assert_eq!(hist[0], (33.0, -150.0), "net = in(100) - out(250)");
+
+        // And not again until the next interval elapses.
+        view.poll();
+        assert_eq!(view.history["AC500-1"].len(), 1);
+    }
+
+    #[test]
+    fn publish_packets_roundtrip_through_the_parser() {
+        let pkt = encode_publish("bluetti/command/AC500-1/ac_output_on", b"OFF");
+        let (topic, payload, pid) = parse_publish(pkt[0], &pkt[2..]).unwrap();
+        assert_eq!(topic, "bluetti/command/AC500-1/ac_output_on");
+        assert_eq!(payload, b"OFF");
+        assert_eq!(pid, None, "commands go out at QoS 0");
+    }
+
+    #[test]
+    fn toggling_a_switch_arms_first_then_publishes_the_command() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let broker = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let (h, _) = read_packet(&mut s).unwrap();
+            assert_eq!(h >> 4, 1, "expected CONNECT");
+            s.write_all(&[0x20, 0x02, 0x00, 0x00]).unwrap();
+            let (h, body) = read_packet(&mut s).unwrap();
+            assert_eq!(h >> 4, 3, "expected PUBLISH");
+            let (topic, payload, _) = parse_publish(h, &body).unwrap();
+            assert_eq!(topic, "bluetti/command/AC500-1/ac_output_on");
+            assert_eq!(payload, b"OFF");
+        });
+
+        let mut view = BluettiView::new(Some(BluettiConfig {
+            broker: Some(addr.to_string()),
+            device: None,
+            topic_prefix: None,
+        }));
+        view.devices.push("AC500-1".into());
+        view.fields
+            .entry("AC500-1".into())
+            .or_default()
+            .insert("ac_output_on".into(), field("ON"));
+        view.state.select(Some(0));
+
+        // First press only arms.
+        view.toggle_selected();
+        assert!(
+            view.status.contains("press t again"),
+            "armed: {}",
+            view.status
+        );
+        // Second press publishes ON -> OFF and reports back.
+        view.toggle_selected();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !view.status.contains("sent") && Instant::now() < deadline {
+            view.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(view.status, "AC output switch OFF sent");
+        broker.join().unwrap();
+    }
+
+    #[test]
+    fn toggle_refuses_non_switch_fields() {
+        let mut view = BluettiView::new(None);
+        view.devices.push("AC500-1".into());
+        view.fields
+            .entry("AC500-1".into())
+            .or_default()
+            .insert("total_battery_percent".into(), field("33"));
+        view.state.select(Some(0));
+        view.toggle_selected();
+        assert_eq!(view.status, "Battery isn't a switch");
+        view.toggle_selected();
+        assert!(
+            !view.status.contains("press t again"),
+            "non-switches never arm"
+        );
     }
 
     #[test]

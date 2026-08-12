@@ -119,6 +119,10 @@ pub struct BbsHeader {
     /// Message-of-the-day lines, shown as a scrolling ticker under the
     /// banner. Omit (or leave empty) to hide the ticker entirely.
     pub motd: Option<Vec<String>>,
+    /// Starting in-category order of menu items: `config` (default),
+    /// `launches` (most launched first), or `recent` (most recently
+    /// launched first). The `s` key cycles through them live.
+    pub menu_sort: Option<String>,
 }
 
 pub fn load_config(override_path: Option<PathBuf>) -> Result<(BbsConfig, PathBuf)> {
