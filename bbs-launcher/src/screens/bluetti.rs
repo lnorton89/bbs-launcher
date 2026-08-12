@@ -434,22 +434,44 @@ pub fn field_label(name: &str) -> String {
         "arm_version" => "ARM firmware".into(),
         "dsp_version" => "DSP firmware".into(),
         other => {
-            // snake_case -> Sentence case for fields we don't know.
-            let mut s = other.replace('_', " ");
-            if let Some(first) = s.get_mut(0..1) {
-                first.make_ascii_uppercase();
-            }
-            s
+            // snake_case -> Sentence case for fields we don't know,
+            // keeping AC/DC as acronyms ("ac_input_frequency" ->
+            // "AC input frequency").
+            other
+                .split('_')
+                .enumerate()
+                .map(|(i, word)| match word {
+                    "ac" => "AC".to_string(),
+                    "dc" => "DC".to_string(),
+                    w if i == 0 => {
+                        let mut s = w.to_string();
+                        if let Some(first) = s.get_mut(0..1) {
+                            first.make_ascii_uppercase();
+                        }
+                        s
+                    }
+                    w => w.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
         }
     }
 }
 
-/// Unit suffix shown after the value, when the field has one.
+/// Unit suffix shown after the value, when the field has one. The
+/// explicit cases cover the classic fields; the suffix heuristics cover
+/// the wider set richer bridges publish (frequencies, voltages,
+/// currents). Callers should only append a unit when the value is
+/// actually numeric — e.g. `cell_voltages` carries a JSON list.
 pub fn field_unit(name: &str) -> &'static str {
     match name {
         "total_battery_percent" => " %",
-        "ac_output_power" | "dc_output_power" | "ac_input_power" | "dc_input_power" => " W",
         "power_generation" => " kWh",
+        _ if name.ends_with("_power") || name.contains("_power_") => " W",
+        _ if name.ends_with("_frequency") => " Hz",
+        _ if name.contains("voltage") => " V",
+        _ if name.contains("current") => " A",
+        _ if name.starts_with("battery_range") => " %",
         _ => "",
     }
 }

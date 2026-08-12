@@ -633,6 +633,83 @@ fn animation_churn_stays_a_fraction_of_the_screen() {
 }
 
 #[test]
+fn bluetti_long_field_names_never_collide_with_values() {
+    use crate::screens::bluetti::Field;
+    use std::time::Instant;
+
+    let mut app = test_app();
+    app.mode = Mode::Bluetti;
+    app.bluetti.devices.push("AC500-1".into());
+    let fields = app.bluetti.fields.entry("AC500-1".into()).or_default();
+    // The long names a real bluetti-mqtt-node bridge publishes — these
+    // used to overflow the fixed 18-char label column straight into
+    // their values ("Ac input frequency59.96").
+    for (name, value) in [
+        ("total_battery_percent", "61"),
+        ("ac_input_frequency", "59.96"),
+        ("internal_current_three", "15.3"),
+        ("battery_range_start", "20"),
+        ("bluetooth_connected", "ON"),
+        ("cell_voltages", "[3.38,3.37]"),
+    ] {
+        fields.insert(
+            name.into(),
+            Field {
+                value: value.into(),
+                updated: Instant::now(),
+            },
+        );
+    }
+    app.bluetti.state.select(Some(0));
+
+    let text = buffer_text(&mut app);
+    assert!(
+        text.contains("AC input frequency"),
+        "ac/dc render as acronyms"
+    );
+    assert!(
+        !text.contains("frequency59.96"),
+        "label column must never collide with values"
+    );
+    assert!(!text.contains("start20"), "every label keeps its gutter");
+    assert!(text.contains("59.96 Hz"), "frequency unit inferred");
+    assert!(text.contains("15.3 A"), "current unit inferred");
+    assert!(text.contains("20 %"), "battery range unit inferred");
+    assert!(
+        !text.contains("] V"),
+        "list values (cell_voltages) get no unit"
+    );
+}
+
+/// Renders the Bluetti screen against the LIVE broker and prints it,
+/// so layout changes can be eyeballed with the full real field set.
+/// Run: cargo test -p bbs-launcher live_bluetti -- --ignored --nocapture
+#[test]
+#[ignore = "needs the live broker + bridge"]
+fn live_bluetti_screen_renders_real_fields() {
+    use std::time::{Duration, Instant};
+    let mut app = test_app();
+    app.mode = Mode::Bluetti;
+    app.bluetti.open();
+    // Long enough to accumulate a few trend samples (one per 5s).
+    let deadline = Instant::now() + Duration::from_secs(21);
+    while Instant::now() < deadline {
+        app.bluetti.poll();
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(150, 46)).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+    for y in 0..buf.area.height {
+        let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+        println!("{}", row.trim_end());
+    }
+    app.bluetti.stop();
+    let n = app.bluetti.sorted_fields().len();
+    assert!(n > 10, "expected the rich live field set, got {n}");
+}
+
+#[test]
 fn sparkline_scales_windows_and_handles_flat_data() {
     use super::bluetti::sparkline;
     assert_eq!(sparkline(&[], 10), "");

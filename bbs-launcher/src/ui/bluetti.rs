@@ -112,9 +112,17 @@ fn draw_bluetti_list(frame: &mut Frame, area: Rect, app: &mut App) {
     let accent = app.accent();
     app.bluetti.list_area = Some(area);
 
-    let rows: Vec<ListItem> = app
-        .bluetti
-        .sorted_fields()
+    let fields = app.bluetti.sorted_fields();
+    // The label column is sized to the longest label on screen, so a
+    // bridge that publishes long field names ("Internal AC frequency")
+    // can never collide with its values. The +2 keeps a visible gutter.
+    let label_width = fields
+        .iter()
+        .map(|(name, _)| crate::screens::bluetti::field_label(name).chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
+    let rows: Vec<ListItem> = fields
         .into_iter()
         .map(|(name, field)| {
             let stale = field.updated.elapsed() > crate::screens::bluetti::STALE_AFTER;
@@ -127,15 +135,23 @@ fn draw_bluetti_list(frame: &mut Frame, area: Rect, app: &mut App) {
                     _ => Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
                 }
             };
+            // Units only make sense on numeric values — `cell_voltages`
+            // is a JSON list, switches are ON/OFF.
+            let unit = if field.value.parse::<f64>().is_ok() {
+                crate::screens::bluetti::field_unit(name)
+            } else {
+                ""
+            };
             ListItem::new(Line::from(vec![
                 Span::styled(
-                    format!(" {:<18}", crate::screens::bluetti::field_label(name)),
+                    format!(
+                        " {:<width$}",
+                        crate::screens::bluetti::field_label(name),
+                        width = label_width
+                    ),
                     Style::default().fg(Color::Gray),
                 ),
-                Span::styled(
-                    format!("{}{}", field.value, crate::screens::bluetti::field_unit(name)),
-                    value_style,
-                ),
+                Span::styled(format!("{}{}", field.value, unit), value_style),
             ]))
         })
         .collect();
@@ -260,19 +276,43 @@ fn draw_bluetti_summary(frame: &mut Frame, area: Rect, app: &App) {
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
-        // Five-minute trend sparklines, once enough samples exist.
-        if let Some(history) = view.history.get(device).filter(|h| h.len() >= 2) {
+        // Rolling trends (one sample every 5s, up to five minutes),
+        // shown once there is enough history to mean anything. The
+        // range annotation says what each sparkline spans, so a flat
+        // line at "61…61" reads as steady rather than broken.
+        if let Some(history) = view.history.get(device).filter(|h| h.len() >= 4) {
             let (batteries, nets): (Vec<f64>, Vec<f64>) = history.iter().copied().unzip();
-            let width = (area.width as usize).saturating_sub(14).clamp(10, 40);
+            let width = (area.width as usize).saturating_sub(28).clamp(10, 30);
+            let span = |v: &[f64]| {
+                v.iter()
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &x| {
+                        (lo.min(x), hi.max(x))
+                    })
+            };
+            let (nlo, nhi) = span(&nets);
+            let (blo, bhi) = span(&batteries);
+            let minutes = ((history.len() * 5).div_ceil(60)).max(1);
+            lines.push(Line::from(Span::styled(
+                format!(" Trend, last {minutes} min"),
+                Style::default().fg(Color::DarkGray),
+            )));
             lines.push(Line::from(vec![
-                Span::styled(" Net trend ", Style::default().fg(Color::DarkGray)),
+                Span::styled("   net W   ", Style::default().fg(Color::DarkGray)),
                 Span::styled(sparkline(&nets, width), Style::default().fg(accent)),
+                Span::styled(
+                    format!("  {nlo:+.0}…{nhi:+.0}"),
+                    Style::default().fg(Color::Gray),
+                ),
             ]));
             lines.push(Line::from(vec![
-                Span::styled(" Battery ~ ", Style::default().fg(Color::DarkGray)),
+                Span::styled("   batt %  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     sparkline(&batteries, width),
                     Style::default().fg(Color::Green),
+                ),
+                Span::styled(
+                    format!("  {blo:.0}…{bhi:.0}"),
+                    Style::default().fg(Color::Gray),
                 ),
             ]));
         }
