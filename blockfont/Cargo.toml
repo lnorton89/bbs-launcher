@@ -1,0 +1,8 @@
+[package]
+name = "blockfont"
+version = "0.1.0"
+edition = "2021"
+description = "Hand-rolled block-letter ASCII art banners for terminal apps — plain Unicode box-drawing characters, no external font files, renders consistently across terminals and fonts."
+license = "MIT"
+keywords = ["ascii-art", "banner", "figlet", "terminal", "cli"]
+categories = ["command-line-interface", "text-processing"]

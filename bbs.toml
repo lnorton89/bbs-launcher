@@ -1,6 +1,8 @@
 [bbs]
 title = "Lawrence's Launcher"
 subtitle = "Terminal Launcher v0.1"
+# Banner font: "shadow" (solid fill, default) or "lined" (same letterforms, horizontal-line fill)
+banner_style = "lined"
 
 [[items]]
 key = "1"

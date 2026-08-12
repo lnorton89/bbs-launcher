@@ -2,6 +2,22 @@
 
 A retro-futuristic BBS-style terminal launcher built in Rust with `ratatui` and `crossterm`.
 
+## Project Structure
+
+This is a Cargo workspace with two crates:
+
+- **`bbs-launcher/`** — the TUI app itself (config loading, menu, event loop).
+- **`blockfont/`** — a standalone, dependency-free library crate that renders text as block-letter ASCII art (`Shadow` and `Lined` styles). It has no ties to this app and can be reused or published on its own — see `blockfont/src/lib.rs`.
+
+```
+bbs-launcher/src/
+  main.rs    entry point
+  config.rs  bbs.toml loading/parsing
+  app.rs     App state
+  ui.rs      ratatui drawing (banner/menu/status/footer)
+  run.rs     event loop + command launching
+```
+
 ## Features
 
 - 🎨 **Retro BBS aesthetic** - ASCII art banner, cyan-on-dark theme, smooth animations
