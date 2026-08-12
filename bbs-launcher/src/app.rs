@@ -11,7 +11,13 @@ use std::time::{Instant, SystemTime};
 /// UI ticks per second. Animation phases are derived from the tick
 /// counter, so this is what converts configured durations into the
 /// per-tick steps the drawing code works in.
-pub const TICKS_PER_SEC: f32 = 10.0;
+///
+/// Kept deliberately low: every tick recolours the banner, the border
+/// chase, and the ticker — around a thousand cells — and sustained
+/// escape-code throughput is what pushes ConPTY into visual corruption.
+/// Input latency is unaffected; key and mouse events interrupt the
+/// tick wait immediately.
+pub const TICKS_PER_SEC: f32 = 5.0;
 
 /// Seconds for one lap of the rainbow border chase when unconfigured.
 const DEFAULT_CHASE_LAP_SECS: f32 = 12.0;
@@ -288,8 +294,9 @@ impl App {
         match self.theme {
             Theme::Solid(c) => c,
             Theme::Rainbow => {
+                // 4.8°/tick at 5 ticks/sec = a lap every 15 seconds.
                 let hue = if self.animate {
-                    (self.tick as f32 * 2.4) % 360.0
+                    (self.tick as f32 * 4.8) % 360.0
                 } else {
                     200.0
                 };

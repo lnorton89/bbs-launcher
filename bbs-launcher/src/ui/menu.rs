@@ -58,8 +58,9 @@ fn draw_banner(frame: &mut Frame, area: Rect, app: &App) {
     // `app.animate` rather than re-reading the config: one source of
     // truth, so the banner and the border chase can never disagree
     // about whether animation is on.
+    // 0.24/tick keeps the shimmer speed of the old 10-tick rate.
     let phase = if app.animate {
-        app.tick as f32 * 0.12
+        app.tick as f32 * 0.24
     } else {
         0.0
     };
@@ -143,8 +144,8 @@ fn draw_ticker(frame: &mut Frame, area: Rect, app: &App) {
     let Some(text) = app.motd.as_deref() else {
         return;
     };
-    // Two ticks per character keeps the scroll readable at a 100ms tick.
-    let offset = if app.animate { (app.tick / 2) as usize } else { 0 };
+    // One character per tick: five chars a second at the 5 ticks/sec rate.
+    let offset = if app.animate { app.tick as usize } else { 0 };
     let visible = marquee(text, area.width as usize, offset);
 
     let ticker = Paragraph::new(Line::from(vec![Span::styled(

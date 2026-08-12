@@ -69,7 +69,13 @@ fn main() -> Result<()> {
     // per write, and a frame issues one write per style run — hundreds of
     // locked syscalls each. BufWriter collapses that into one flush per
     // frame. (`execute!` flushes, so escapes stay correctly ordered.)
-    let backend = CrosstermBackend::new(io::BufWriter::new(stdout));
+    //
+    // The capacity is sized to hold a whole frame's escape codes: a
+    // default 8KB buffer split animated frames across several WriteFile
+    // calls at arbitrary byte boundaries — mid-escape-sequence, even
+    // mid-UTF-8-glyph — which ConPTY under load turns into on-screen
+    // garbage that accumulates over time.
+    let backend = CrosstermBackend::new(io::BufWriter::with_capacity(512 * 1024, stdout));
     let mut terminal = Terminal::new(backend)?;
 
     let result = run_app(&mut terminal, app);
