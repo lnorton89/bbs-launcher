@@ -36,6 +36,31 @@ pub struct BbsConfig {
     /// GitHub dashboard customization. Omit for sensible defaults.
     #[serde(default)]
     pub github: Option<GithubConfig>,
+    /// Bluetti power-station monitor customization. Omit for defaults
+    /// (local broker, all devices).
+    #[serde(default)]
+    pub bluetti: Option<BluettiConfig>,
+}
+
+/// Customization for the built-in Bluetti monitor screen, which
+/// subscribes to the MQTT state topics that `bluetti-mqtt-node`
+/// publishes. `PartialEq` so a live config reload can tell whether the
+/// subscriber needs redialling.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+pub struct BluettiConfig {
+    /// MQTT broker to subscribe to, as `mqtt://host:port`, `host:port`,
+    /// or bare `host` (port defaults to 1883).
+    /// Default: `mqtt://127.0.0.1:1883`.
+    #[serde(default)]
+    pub broker: Option<String>,
+    /// Only show this device (`<MODEL>-<SERIAL>`, e.g.
+    /// `AC500-2237000003358`). Default: every device on the broker.
+    #[serde(default)]
+    pub device: Option<String>,
+    /// Topic prefix the bridge publishes under. Default: `bluetti`
+    /// (topics like `bluetti/state/<device>/<field>`).
+    #[serde(default)]
+    pub topic_prefix: Option<String>,
 }
 
 /// Customization for the built-in GitHub dashboard screen.

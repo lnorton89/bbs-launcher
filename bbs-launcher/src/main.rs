@@ -1,4 +1,5 @@
 mod app;
+mod bluetti;
 mod config;
 mod github;
 mod run;

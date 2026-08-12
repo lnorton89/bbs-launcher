@@ -1,3 +1,4 @@
+use crate::bluetti::BluettiView;
 use crate::config::{BbsConfig, BbsItem};
 use crate::github::GithubView;
 use crate::stats::Stats;
@@ -26,6 +27,8 @@ pub enum Mode {
     Help,
     /// Built-in GitHub dashboard screen.
     Github,
+    /// Built-in Bluetti power-station monitor screen.
+    Bluetti,
 }
 
 /// Accent theme. `Solid` uses one named color everywhere; `Rainbow`
@@ -100,6 +103,8 @@ pub struct App {
     pub motd: Option<String>,
     /// State for the built-in GitHub dashboard screen.
     pub github: GithubView,
+    /// State for the built-in Bluetti monitor screen.
+    pub bluetti: BluettiView,
 }
 
 impl App {
@@ -107,6 +112,7 @@ impl App {
         let mut state = ListState::default();
         state.select(Some(0));
         let github = GithubView::new(config.github.clone());
+        let bluetti = BluettiView::new(config.bluetti.clone());
         let config_mtime = file_mtime(&config_path);
         let items = config.items.clone();
         let mut app = Self {
@@ -136,6 +142,7 @@ impl App {
             config_mtime,
             motd: None,
             github,
+            bluetti,
         };
         app.refresh_derived();
         app.apply_filter();
@@ -204,6 +211,12 @@ impl App {
         // unless its slice of the config actually changed.
         if self.config.github != config.github {
             self.github = GithubView::new(config.github.clone());
+        }
+        // Same for the Bluetti subscriber: redial only when its slice
+        // changed, and stop the old thread so it doesn't linger.
+        if self.config.bluetti != config.bluetti {
+            self.bluetti.stop();
+            self.bluetti = BluettiView::new(config.bluetti.clone());
         }
         self.items = config.items.clone();
         self.config = config;
@@ -451,10 +464,16 @@ impl App {
         // Drain background GitHub fetches only while that screen is open.
         if self.mode == Mode::Github {
             self.github.poll();
-        } else if self.tick.is_multiple_of(TICKS_PER_SEC as u64) {
+        }
+        // The Bluetti subscriber streams continuously once started, so
+        // its channel is drained every tick — otherwise it would buffer
+        // unboundedly while the screen is closed.
+        self.bluetti.poll();
+        let watching = matches!(self.mode, Mode::Normal | Mode::Search | Mode::Help);
+        if watching && self.tick.is_multiple_of(TICKS_PER_SEC as u64) {
             // Watch the config file for edits about once a second.
-            // Skipped while the GitHub screen is open so a reload can't
-            // tear down its in-flight fetches; a pending change is
+            // Skipped while a built-in screen is open so a reload can't
+            // tear down its live state mid-view; a pending change is
             // picked up as soon as the menu is back.
             let mtime = file_mtime(&self.config_file);
             if mtime != self.config_mtime {

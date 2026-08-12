@@ -33,6 +33,7 @@ bbs-launcher/src/
 - 📺 **Scrolling MOTD** - A marquee of your own messages under the banner
 - 📊 **Launch stats** - Remembers what you run and when
 - 🐙 **GitHub dashboard screen** - A built-in, customizable all-in-one view (notifications, PRs, issues, your repos, starred repos, gists, profile) reusing your `gh` login — no extra tokens to manage. The Repos tab lists every repo you have access to with stars/forks/open-issue counts, sortable on the fly with `s`
+- 🔋 **Bluetti power monitor screen** - Live power-station stats (battery, AC/DC flows, switches) streamed from the [`bluetti-mqtt-node`](https://github.com/lnorton89/bluetti-mqtt-node) MQTT bridge, via a built-in dependency-free MQTT subscriber (`screen = "bluetti"`, `[bluetti]` config for broker/device/prefix)
 - 📺 **Complex menu items** - Items can open built-in screens instead of just running a command
 - 🖥️ **Cross-terminal ready** - Tested on Windows Terminal, with PowerShell/CMD/Tabby support
 

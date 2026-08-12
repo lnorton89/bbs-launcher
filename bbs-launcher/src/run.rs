@@ -110,6 +110,18 @@ fn handle_key<B: Backend>(
             }
             Nav::Stay => Ok(false),
         },
+        Mode::Bluetti => {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => app.mode = Mode::Normal,
+                KeyCode::Down | KeyCode::Char('j') => app.bluetti.next(),
+                KeyCode::Up | KeyCode::Char('k') => app.bluetti.previous(),
+                KeyCode::Left | KeyCode::Char('h') => app.bluetti.prev_tab(),
+                KeyCode::Right | KeyCode::Char('l') => app.bluetti.next_tab(),
+                KeyCode::Char('r') => app.bluetti.reconnect(),
+                _ => {}
+            }
+            Ok(false)
+        }
         Mode::Search => match key.code {
             KeyCode::Esc => {
                 app.query.clear();
@@ -235,6 +247,15 @@ fn activate_item<B: Backend>(
             app.github.open();
             Ok(false)
         }
+        Some("bluetti") => {
+            app.stats.record(&item.label);
+            if let Err(err) = app.stats.save() {
+                app.status_message = format!("Couldn't save stats: {}", err);
+            }
+            app.mode = Mode::Bluetti;
+            app.bluetti.open();
+            Ok(false)
+        }
         Some(other) => {
             app.status_message = format!("Unknown screen type: {}", other);
             Ok(false)
@@ -251,6 +272,14 @@ fn handle_mouse<B: Backend>(
 ) -> Result<bool> {
     if app.mode == Mode::Github {
         return handle_github_mouse(app, mouse);
+    }
+    if app.mode == Mode::Bluetti {
+        match mouse.kind {
+            MouseEventKind::ScrollDown => app.bluetti.next(),
+            MouseEventKind::ScrollUp => app.bluetti.previous(),
+            _ => {}
+        }
+        return Ok(false);
     }
     match mouse.kind {
         MouseEventKind::ScrollDown => app.next(),

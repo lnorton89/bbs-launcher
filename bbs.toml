@@ -115,6 +115,17 @@ wsl = true
 category = "System"
 
 [[items]]
+key = "B"
+label = "Bluetti"
+# No `cmd`: opens the built-in Bluetti power-station monitor screen,
+# fed by the bluetti-mqtt-node bridge over MQTT.
+desc = "Power station live stats"
+icon = "PW"
+color = "yellow"
+screen = "bluetti"
+category = "System"
+
+[[items]]
 key = "Q"
 label = "Quit"
 cmd = "exit"
@@ -137,3 +148,12 @@ refresh_secs = 120
 # separated subset of owner, collaborator (write access), and
 # organization_member. Defaults to all three.
 # affiliation = "owner,collaborator,organization_member"
+
+# The Bluetti screen subscribes to the MQTT state topics published by
+# bluetti-mqtt-node. Everything here is optional — the defaults match a
+# local bridge (mqtt://127.0.0.1:1883, topics under bluetti/state/...).
+[bluetti]
+broker = "mqtt://127.0.0.1:1883"
+# Only show one device; omit to show every device on the broker.
+# device = "AC500-2237000003358"
+# topic_prefix = "bluetti"

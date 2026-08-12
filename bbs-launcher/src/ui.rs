@@ -215,6 +215,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_github(frame, app);
         return;
     }
+    if app.mode == Mode::Bluetti {
+        draw_bluetti(frame, app);
+        return;
+    }
     // The ticker row only exists when a motd is configured.
     let ticker_rows = if app.motd.is_some() { 1 } else { 0 };
     let chunks = Layout::default()
@@ -600,8 +604,8 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         Mode::Search => "type to filter · Enter launch · Esc cancel",
         Mode::Help => "press any key to close help",
         Mode::Normal => "j/k move · Enter launch · / search · ? help · q quit",
-        // The GitHub screen draws its own footer; this is never rendered.
-        Mode::Github => "",
+        // Built-in screens draw their own footers; never rendered.
+        Mode::Github | Mode::Bluetti => "",
     };
 
     let line = Line::from(vec![
@@ -930,6 +934,266 @@ fn draw_github_details(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(details, area);
 }
 
+// ─────────────────────────── Bluetti screen ───────────────────────────
+
+fn draw_bluetti(frame: &mut Frame, app: &mut App) {
+    let accent = app.accent();
+    let area = frame.area();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    // ── header: title + connection status ──
+    let status_color = if app.bluetti.connected {
+        Color::Green
+    } else {
+        Color::Red
+    };
+    let mut head = vec![
+        Span::styled(
+            " Bluetti ",
+            Style::default()
+                .bg(accent)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(app.bluetti.status.clone(), Style::default().fg(status_color)),
+    ];
+    if app.bluetti.msg_count > 0 {
+        head.push(Span::styled(
+            format!("   {} updates ", app.bluetti.msg_count),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    let header = Paragraph::new(Line::from(head)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(accent))
+            .title(" Bluetti Monitor ")
+            .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
+            .title_alignment(Alignment::Center),
+    );
+    frame.render_widget(header, chunks[0]);
+
+    // ── device tab bar ──
+    let mut tab_line: Vec<Span> = Vec::new();
+    if app.bluetti.devices.is_empty() {
+        tab_line.push(Span::styled(
+            " waiting for device data… ",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    for (i, device) in app.bluetti.devices.iter().enumerate() {
+        if i > 0 {
+            tab_line.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+        }
+        if i == app.bluetti.tab {
+            tab_line.push(Span::styled(
+                format!(" {} ", device),
+                Style::default()
+                    .bg(accent)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            tab_line.push(Span::styled(
+                format!(" {} ", device),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(tab_line)).alignment(Alignment::Center),
+        chunks[1],
+    );
+
+    // ── body: field list + summary pane ──
+    let mid = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(chunks[2]);
+    draw_bluetti_list(frame, mid[0], app);
+    draw_bluetti_summary(frame, mid[1], app);
+    apply_chase(frame, app, &[chunks[0], mid[0], mid[1]]);
+
+    // ── footer ──
+    frame.render_widget(
+        Paragraph::new(" ↑/↓ j/k move · ←/→ h/l device · r reconnect · q back ")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::DarkGray)),
+        chunks[3],
+    );
+}
+
+fn draw_bluetti_list(frame: &mut Frame, area: Rect, app: &mut App) {
+    let accent = app.accent();
+    app.bluetti.list_area = Some(area);
+
+    let rows: Vec<ListItem> = app
+        .bluetti
+        .sorted_fields()
+        .into_iter()
+        .map(|(name, field)| {
+            let stale = field.updated.elapsed() > crate::bluetti::STALE_AFTER;
+            let value_style = if stale {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                match field.value.as_str() {
+                    "ON" => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    "OFF" => Style::default().fg(Color::DarkGray),
+                    _ => Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                }
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!(" {:<18}", crate::bluetti::field_label(name)),
+                    Style::default().fg(Color::Gray),
+                ),
+                Span::styled(
+                    format!("{}{}", field.value, crate::bluetti::field_unit(name)),
+                    value_style,
+                ),
+            ]))
+        })
+        .collect();
+
+    let (title, border) = if rows.is_empty() {
+        (" Live State  (no data yet) ".to_string(), Color::DarkGray)
+    } else {
+        (format!(" Live State ({}) ", rows.len()), accent)
+    };
+    let list = List::new(rows)
+        .block(github_block(&title, border))
+        .highlight_style(
+            Style::default()
+                .bg(accent)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+    frame.render_stateful_widget(list, area, &mut app.bluetti.state);
+}
+
+/// Renders `pct` as a `[█████░░░] 33%` gauge.
+fn battery_bar(pct: u64, width: usize) -> String {
+    let filled = (pct.min(100) as usize * width) / 100;
+    let mut bar = String::from("[");
+    for i in 0..width {
+        bar.push(if i < filled { '█' } else { '░' });
+    }
+    bar.push_str(&format!("] {pct}%"));
+    bar
+}
+
+fn draw_bluetti_summary(frame: &mut Frame, area: Rect, app: &App) {
+    let accent = app.accent();
+    let view = &app.bluetti;
+    let mut lines: Vec<Line> = Vec::new();
+
+    let device_fields = view.current_device().and_then(|d| view.fields.get(d));
+    let value_of = |name: &str| {
+        device_fields
+            .and_then(|f| f.get(name))
+            .map(|f| f.value.clone())
+    };
+    let watts_of = |name: &str| {
+        value_of(name)
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+
+    if let Some(device) = view.current_device() {
+        lines.push(Line::from(Span::styled(
+            format!(" {}", device),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::default());
+
+        if let Some(pct) = value_of("total_battery_percent").and_then(|v| v.parse::<u64>().ok()) {
+            let color = match pct {
+                0..=19 => Color::Red,
+                20..=49 => Color::Yellow,
+                _ => Color::Green,
+            };
+            lines.push(Line::from(vec![
+                Span::styled(" Battery   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    battery_bar(pct, 16),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+        let power_in = watts_of("ac_input_power") + watts_of("dc_input_power");
+        let power_out = watts_of("ac_output_power") + watts_of("dc_output_power");
+        let net = power_in - power_out;
+        lines.push(Line::from(vec![
+            Span::styled(" In / Out  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{power_in:.0} W in"),
+                Style::default().fg(Color::Green),
+            ),
+            Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{power_out:.0} W out"),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(" Net       ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{}{:.0} W", if net >= 0.0 { "+" } else { "" }, net),
+                Style::default()
+                    .fg(if net >= 0.0 { Color::Green } else { Color::Yellow })
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::default());
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled(" Broker    ", Style::default().fg(Color::DarkGray)),
+        Span::styled(view.broker.clone(), Style::default().fg(Color::White)),
+    ]));
+    if let Some(filter) = &view.device_filter {
+        lines.push(Line::from(vec![
+            Span::styled(" Filter    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(filter.clone(), Style::default().fg(Color::White)),
+        ]));
+    }
+    if let Some(last) = view.last_msg {
+        let secs = last.elapsed().as_secs();
+        let age = if secs == 0 {
+            "just now".to_string()
+        } else {
+            format!("{secs}s ago")
+        };
+        lines.push(Line::from(vec![
+            Span::styled(" Last data ", Style::default().fg(Color::DarkGray)),
+            Span::styled(age, Style::default().fg(Color::White)),
+        ]));
+    }
+    if view.devices.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            " Start bluetti-mqtt-node and data will appear here.",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        )));
+    }
+
+    let summary = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(github_block(" Summary ", Color::DarkGray));
+    frame.render_widget(summary, area);
+}
+
 fn draw_help(frame: &mut Frame, app: &App) {
     // Sized to the longest entry line and the full row count so nothing
     // is clipped; centered_rect clamps this to the terminal.
@@ -966,9 +1230,9 @@ fn draw_help(frame: &mut Frame, app: &App) {
         entry("q / Esc", "quit"),
         Line::default(),
         section("Screens"),
-        entry("GitHub item", "opens the GitHub dashboard (screen = \"github\")"),
-        entry("←/→ h/l", "switch dashboard tab"),
-        entry("o · m · r · s", "open · mark read · refresh · sort repos"),
+        entry("screen items", "GitHub dashboard · Bluetti power monitor"),
+        entry("←/→ h/l", "switch screen tab"),
+        entry("o · m · r · s", "open · mark read · refresh/reconnect · sort"),
         Line::default(),
         section("Config"),
         entry("bbs.toml", "theme · motd · items — live-reloads on save"),
@@ -1521,6 +1785,57 @@ mod tests {
         // The full screen renders fine under a rainbow accent.
         let text = buffer_text(&mut app);
         assert!(text.contains("Main Menu"));
+    }
+
+    #[test]
+    fn bluetti_screen_renders_live_fields_and_summary() {
+        use crate::bluetti::Field;
+        use std::time::Instant;
+
+        let mut app = test_app();
+        app.mode = Mode::Bluetti;
+        app.bluetti.status = "connected to mqtt://127.0.0.1:1883".into();
+        app.bluetti.connected = true;
+        app.bluetti.devices.push("AC500-2237000003358".into());
+        let fields = app
+            .bluetti
+            .fields
+            .entry("AC500-2237000003358".into())
+            .or_default();
+        for (name, value) in [
+            ("total_battery_percent", "33"),
+            ("ac_output_power", "241"),
+            ("ac_input_power", "0"),
+            ("ac_output_on", "ON"),
+            ("device_type", "AC500"),
+        ] {
+            fields.insert(
+                name.into(),
+                Field {
+                    value: value.into(),
+                    updated: Instant::now(),
+                },
+            );
+        }
+        app.bluetti.state.select(Some(0));
+
+        let text = buffer_text(&mut app);
+        assert!(text.contains("Bluetti Monitor"));
+        assert!(text.contains("AC500-2237000003358"));
+        assert!(text.contains("Battery"), "labels render");
+        assert!(text.contains("241 W"), "units render");
+        assert!(text.contains("241 W out"), "summary totals render");
+        assert!(text.contains("connected to mqtt://127.0.0.1:1883"));
+
+        // The battery gauge reflects the live percentage.
+        assert!(text.contains("33%"));
+
+        // Empty state: no devices yet still renders with a hint.
+        let mut app = test_app();
+        app.mode = Mode::Bluetti;
+        let text = buffer_text(&mut app);
+        assert!(text.contains("waiting for device data"));
+        assert!(text.contains("no data yet"));
     }
 
     #[test]
