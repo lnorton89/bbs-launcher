@@ -4,6 +4,18 @@
 use crate::app::{App, Theme};
 use ratatui::{layout::Rect, style::Color, Frame};
 
+/// Rounds `v` to the nearest multiple of `step`.
+///
+/// Animated colours are quantized in time with this: a cell's colour
+/// only changes when the underlying value crosses a step, so between
+/// steps the renderer's diff for that cell is empty and no bytes reach
+/// the terminal. Without it every animated cell changed every frame,
+/// and that sustained full-coverage recolouring is what pushed
+/// ConPTY/Windows Terminal into progressive display corruption.
+pub fn quant(v: f32, step: f32) -> f32 {
+    (v / step).round() * step
+}
+
 /// Convert an HSV triple (h: 0-360, s/v: 0-1) to an RGB tuple.
 pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
     let c = v * s;
@@ -87,12 +99,18 @@ fn border_chase(
         }
         let t = pos as f32 / perimeter;
         let wave = (t * std::f32::consts::TAU - phase_rad).sin();
+        // Quantized per cell: each cell repaints only when its own value
+        // crosses a step, so per frame only the pattern's moving edges
+        // emit bytes while the rest of the strip diffs to nothing. The
+        // motion still reads as continuous because different cells sit
+        // at different fractions of a step and advance at different
+        // moments.
         let color = match style {
             ChaseStyle::Hue => {
-                let hue = (t * 360.0 - phase_deg).rem_euclid(360.0);
+                let hue = quant((t * 360.0 - phase_deg).rem_euclid(360.0), 4.0);
                 // Stays well clear of 0 so the dim part of the wave
                 // still reads as coloured light rather than going muddy.
-                let glow = 0.68 + 0.32 * wave;
+                let glow = quant(0.68 + 0.32 * wave, 1.0 / 24.0);
                 let (r, g, b) = hsv_to_rgb(hue, 0.85, glow);
                 Color::Rgb(r, g, b)
             }
@@ -104,7 +122,7 @@ fn border_chase(
                 // split. The floor keeps the band visible rather than
                 // punching a hole in the border.
                 let lit = (0.5 + 0.5 * wave).powf(0.4);
-                let level = DIM_FLOOR + (1.0 - DIM_FLOOR) * lit;
+                let level = quant(DIM_FLOOR + (1.0 - DIM_FLOOR) * lit, 1.0 / 24.0);
                 Color::Rgb(
                     (r as f32 * level) as u8,
                     (g as f32 * level) as u8,

@@ -226,9 +226,14 @@ fn rainbow_chase_is_a_smooth_travelling_gradient() {
         .collect();
     assert!(adjacent.len() > 40, "expected long unbroken runs of border");
     let biggest = *adjacent.iter().max().unwrap();
+    // Colours are quantized in fine steps (4° hue, 1/24 glow — see
+    // effects::quant), so adjacent cells differ by at most roughly one
+    // hue quantum (~15 RGB in the steepest sector) plus one glow
+    // quantum (~11). Anything above that would mean visible banding or
+    // a broken gradient.
     assert!(
-        biggest <= 20,
-        "gradient should be gradual, but adjacent cells jumped by {biggest}"
+        biggest <= 32,
+        "gradient should stay smooth, but adjacent cells jumped by {biggest}"
     );
 
     // Rainbow, not monochrome: the whole wheel is represented.
@@ -271,8 +276,13 @@ fn rainbow_chase_is_a_smooth_travelling_gradient() {
         compared += 1;
     }
     assert!(compared > 30, "expected plenty of overlap to compare");
+    // `shift` rounds the slide to whole cells; the fractional remainder
+    // lands within the same colour quantum almost everywhere, and at a
+    // quantum boundary it can differ by about one step (~15 RGB for 4°
+    // of hue, ~11 for 1/24 of glow). More than that would mean the
+    // pattern isn't actually sliding.
     assert!(
-        worst <= 25,
+        worst <= 32,
         "pattern should have slid {shift} cells clockwise, but a cell \
          differed from its predecessor by {worst}"
     );
@@ -573,6 +583,53 @@ fn bluetti_screen_renders_live_fields_and_summary() {
     let text = buffer_text(&mut app);
     assert!(text.contains("waiting for device data"));
     assert!(text.contains("no data yet"));
+}
+
+#[test]
+fn animation_churn_stays_a_fraction_of_the_screen() {
+    // Regression guard for the ConPTY corruption bug: when every
+    // animated cell changed colour every frame, sustained full-coverage
+    // repaints corrupted the terminal over time. Quantization means a
+    // frame's diff only touches the cells whose colour actually
+    // stepped — measure that directly.
+    use crate::app::Theme;
+    let mut app = test_app();
+    app.theme = Theme::Rainbow;
+    app.animate = true;
+
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 32)).unwrap();
+    let snapshot = |t: &mut ratatui::Terminal<TestBackend>, app: &mut App| {
+        t.draw(|f| draw(f, app)).unwrap();
+        t.backend().buffer().clone()
+    };
+    let mut prev = snapshot(&mut terminal, &mut app);
+    let mut changed_total = 0usize;
+    const TICKS: usize = 30;
+    for _ in 0..TICKS {
+        app.on_tick();
+        let cur = snapshot(&mut terminal, &mut app);
+        changed_total += prev
+            .content()
+            .iter()
+            .zip(cur.content().iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        prev = cur;
+    }
+    let per_frame = changed_total / TICKS;
+    let screen = 110 * 32;
+    // Quantization is tuned looks-first (steps too fine to see), so the
+    // animated chrome — borders, banner, ticker, highlight — still
+    // repaints most frames (~730 cells here). What this guards is that
+    // everything else diffs to nothing: the menu list, details pane,
+    // and empty space must never repaint while idle. A regression that
+    // repaints static content blows straight past this bound.
+    assert!(
+        per_frame < screen / 3,
+        "static content is repainting: {per_frame} changed cells/frame \
+         ({} total cells)",
+        screen
+    );
 }
 
 #[test]

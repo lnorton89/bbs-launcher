@@ -1,7 +1,7 @@
 //! The main launcher surface: banner, motd ticker, menu list, details
 //! pane, status line, footer, and the help overlay.
 
-use super::effects::{apply_chase, color_from_str, hsv_to_rgb, theme_rgb};
+use super::effects::{apply_chase, color_from_str, hsv_to_rgb, quant, theme_rgb};
 use super::SPINNER_FRAMES;
 use crate::app::{App, Mode, Row, Theme};
 use crate::stats::time_ago;
@@ -58,9 +58,8 @@ fn draw_banner(frame: &mut Frame, area: Rect, app: &App) {
     // `app.animate` rather than re-reading the config: one source of
     // truth, so the banner and the border chase can never disagree
     // about whether animation is on.
-    // 0.24/tick keeps the shimmer speed of the old 10-tick rate.
     let phase = if app.animate {
-        app.tick as f32 * 0.24
+        app.tick as f32 * 0.12
     } else {
         0.0
     };
@@ -77,18 +76,24 @@ fn draw_banner(frame: &mut Frame, area: Rect, app: &App) {
                     if c == ' ' {
                         return Span::raw(" ");
                     }
-                    // Diagonal brightness wave across the letterforms.
-                    let f = 0.55
-                        + 0.45 * (col as f32 * 0.06 + row as f32 * 0.4 - phase).sin();
+                    // Diagonal brightness wave across the letterforms,
+                    // quantized so a glyph only repaints when its level
+                    // actually steps (see effects::quant).
+                    let f = quant(
+                        0.55 + 0.45 * (col as f32 * 0.06 + row as f32 * 0.4 - phase).sin(),
+                        1.0 / 24.0,
+                    );
                     let color = if rainbow {
                         // Spread the wheel across the letterforms so the
                         // banner carries a gradient of its own, instead
                         // of every glyph sharing one shifting tint. The
                         // brightness floor keeps colours vivid where the
                         // wave dips.
-                        let hue = (col as f32 * 2.4 + row as f32 * 7.0
-                            - phase * 14.0)
-                            .rem_euclid(360.0);
+                        let hue = quant(
+                            (col as f32 * 2.4 + row as f32 * 7.0 - phase * 14.0)
+                                .rem_euclid(360.0),
+                            4.0,
+                        );
                         let (r, g, b) = hsv_to_rgb(hue, 0.85, f.clamp(0.5, 1.0));
                         Color::Rgb(r, g, b)
                     } else {
@@ -144,8 +149,8 @@ fn draw_ticker(frame: &mut Frame, area: Rect, app: &App) {
     let Some(text) = app.motd.as_deref() else {
         return;
     };
-    // One character per tick: five chars a second at the 5 ticks/sec rate.
-    let offset = if app.animate { app.tick as usize } else { 0 };
+    // Two ticks per character keeps the scroll readable at a 100ms tick.
+    let offset = if app.animate { (app.tick / 2) as usize } else { 0 };
     let visible = marquee(text, area.width as usize, offset);
 
     let ticker = Paragraph::new(Line::from(vec![Span::styled(

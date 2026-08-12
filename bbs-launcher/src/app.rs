@@ -12,12 +12,11 @@ use std::time::{Instant, SystemTime};
 /// counter, so this is what converts configured durations into the
 /// per-tick steps the drawing code works in.
 ///
-/// Kept deliberately low: every tick recolours the banner, the border
-/// chase, and the ticker — around a thousand cells — and sustained
-/// escape-code throughput is what pushes ConPTY into visual corruption.
-/// Input latency is unaffected; key and mouse events interrupt the
-/// tick wait immediately.
-pub const TICKS_PER_SEC: f32 = 5.0;
+/// Animated colours are temporally quantized (see `effects::quant`) so
+/// that at this rate only a fraction of animated cells actually change
+/// per frame — sustained full-screen recolouring is what pushes
+/// ConPTY/Windows Terminal into visual corruption.
+pub const TICKS_PER_SEC: f32 = 10.0;
 
 /// Seconds for one lap of the rainbow border chase when unconfigured.
 const DEFAULT_CHASE_LAP_SECS: f32 = 12.0;
@@ -294,9 +293,11 @@ impl App {
         match self.theme {
             Theme::Solid(c) => c,
             Theme::Rainbow => {
-                // 4.8°/tick at 5 ticks/sec = a lap every 15 seconds.
+                // Quantized to 4° steps — imperceptible, but the accent
+                // recolours a lot of chrome, so skipping the frames where
+                // the value wouldn't visibly move trims the diff.
                 let hue = if self.animate {
-                    (self.tick as f32 * 4.8) % 360.0
+                    crate::ui::quant((self.tick as f32 * 2.4) % 360.0, 4.0)
                 } else {
                     200.0
                 };

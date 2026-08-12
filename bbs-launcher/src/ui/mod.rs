@@ -14,7 +14,7 @@ mod menu;
 #[cfg(test)]
 mod tests;
 
-pub use effects::{color_from_str, hsv_to_rgb};
+pub use effects::{color_from_str, hsv_to_rgb, quant};
 
 
 use crate::app::{App, Mode};
