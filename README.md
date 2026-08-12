@@ -11,11 +11,13 @@ This is a Cargo workspace with two crates:
 
 ```
 bbs-launcher/src/
-  main.rs    entry point
+  main.rs    entry point + CLI flags
   config.rs  bbs.toml loading/parsing
-  app.rs     App state
-  ui.rs      ratatui drawing (banner/menu/status/footer)
+  app.rs     App state (menu rows, search, theme)
+  ui.rs      ratatui drawing (banner/ticker/menu/details/status/footer)
   run.rs     event loop + command launching
+  github.rs  built-in GitHub dashboard screen
+  stats.rs   persisted launch counts
 ```
 
 ## Features
@@ -24,6 +26,11 @@ bbs-launcher/src/
 - ⌨️ **Keyboard-driven** - Navigate with `↑/↓` or `j/k`, select with `Enter`, quit with `q`
 - ⚡ **Instant launching** - Pick a command and it fires immediately
 - 🔧 **TOML config** - Easy-to-edit `bbs.toml` for all your shortcuts
+- 🔍 **Fuzzy search** - Press `/` and type; `lzg` finds Lazygit
+- 🗂️ **Foldable categories** - Group items under collapsible headers
+- 📊 **Launch stats** - Remembers what you run and when
+- 🐙 **GitHub dashboard screen** - A built-in, customizable all-in-one view (notifications, PRs, issues, starred repos, gists, profile) reusing your `gh` login — no extra tokens to manage
+- 📺 **Complex menu items** - Items can open built-in screens instead of just running a command
 - 🖥️ **Cross-terminal ready** - Tested on Windows Terminal, with PowerShell/CMD/Tabby support
 
 ## Quick Start
@@ -142,10 +149,27 @@ Or just set `defaultProfile` to `"BBS Launcher"` if using the name string.
 |-----|--------|
 | `↑` / `k` | Move up |
 | `↓` / `j` | Move down |
-| `Enter` | Launch selected item |
-| `q` | Quit |
-| `Esc` | Quit |
+| `g` / `G` | First / last row |
+| `PgUp` / `PgDn` | Jump 5 rows |
+| `←` / `→` | Collapse / expand a category |
+| `Enter` | Launch the selected item, or fold a category header |
+| `1`-`9`, … | Launch by hotkey (works even inside a collapsed category) |
+| `/` | Fuzzy search by label, description, or command |
+| `?` | Toggle the help overlay |
+| Mouse | Scroll to move, click to select, double-click to launch |
+| `q` / `Esc` | Quit |
 | `Ctrl+C` | Force quit |
+
+Launching does not exit the launcher — when the command finishes you
+land back on the menu with its exit status in the status bar.
+
+## Command Line
+
+```bash
+bbs-launcher                      # normal launch
+bbs-launcher --config other.toml  # use a specific config
+bbs-launcher --list               # print the resolved config and items, then exit
+```
 
 ## Adding Items
 
@@ -160,6 +184,130 @@ desc = "Does something cool"
 icon = "MT"
 color = "magenta"
 ```
+
+Optional per-item keys:
+
+| Key | Effect |
+|-----|--------|
+| `wsl = true` | Run under WSL (`wsl bash -c`) instead of `cmd /C` |
+| `cwd = "C:\\path"` | Launch from a specific working directory |
+| `pause = true` | Wait for Enter before returning, so short-lived output stays readable |
+| `category = "Develop"` | Group the item under a foldable header |
+| `screen = "github"` | Open a built-in screen instead of running `cmd` |
+
+## Categories
+
+Items sharing a `category` are grouped under a foldable header, ordered
+by where each category first appears in the file. Items without one are
+listed last, ungrouped. Fold with `←`, `Enter`, or a click on the header;
+hotkeys still work while a category is collapsed.
+
+## Message of the Day
+
+Add a `motd` list to `[bbs]` for a marquee that scrolls under the banner.
+Omit it (or leave it empty) and the row disappears entirely:
+
+```toml
+[bbs]
+motd = [
+  "Welcome back",
+  "Press / to search, ? for help",
+]
+```
+
+## Launch Stats
+
+Every launch is recorded to `~/.config/bbs-launcher/stats.toml`. Usage
+counts appear as a dim `12×` badge next to each item, and the details
+pane shows when you last ran it. Delete the file to reset.
+
+## Theming
+
+Set `theme` in `bbs.toml` to any accent color (`cyan`, `magenta`, `green`,
+`yellow`, `red`, `blue`, `white`, …) or to `rainbow` to cycle the accent
+through the full hue wheel:
+
+```toml
+[bbs]
+theme = "rainbow"           # or e.g. "cyan"
+banner_animation = true     # slow shimmer; false = static accent
+```
+
+With `rainbow`, the banner, borders, tabs, and selection highlight all walk
+the hue wheel together (one slow full cycle roughly every 15 seconds).
+
+## GitHub Dashboard
+
+A built-in screen that shows your GitHub activity in one place: unread
+notifications, PRs and issues assigned to you, starred repos, gists, and
+your profile. It reuses your existing GitHub CLI login, so set that up
+once and you're done:
+
+```bash
+winget install GitHub.cli
+gh auth login
+```
+
+(A `GH_TOKEN`/`GITHUB_TOKEN` environment variable works too.)
+
+Add it to `bbs.toml` as a screen item (no `cmd` needed):
+
+```toml
+[[items]]
+key = "9"
+label = "GitHub"
+desc = "All-in-one GitHub dashboard"
+icon = "GH"
+color = "white"
+screen = "github"
+```
+
+### Customizing the screen
+
+The `[github]` table in `bbs.toml` tunes what it shows (all options are
+optional — defaults shown):
+
+```toml
+[github]
+# Sections shown, in order. Unknown names are ignored.
+# Default: all six below.
+sections = ["notifications", "pull_requests", "issues", "stars", "gists", "profile"]
+per_page = 25          # max entries per section (1-100)
+refresh_secs = 120     # auto-refresh while the screen is open
+# Repo affiliation for the Issues and Pull Requests sections: comma-
+# separated subset of owner, collaborator (write access), and
+# organization_member. Defaults to all three.
+affiliation = "owner,collaborator,organization_member"
+```
+
+The **Issues** and **Pull Requests** tabs list open items across every
+repo you have write access to (own repos + repos where you're a
+collaborator + org repos), most recently updated first.
+
+Opening a notification goes to the real web page for its subject. The
+API hands back an *api.github.com* URL (or none at all), so the link is
+rewritten rather than passed through: resource names that are plural on
+the API but singular on the web are corrected (`/pulls/7` → `/pull/7`),
+and releases fall back to the repo's releases list because the API
+identifies them by numeric id while the web addresses them by tag.
+Notifications with no subject URL — CheckSuite results, Dependabot
+alerts, discussions — land on the matching repo tab (`/actions`,
+`/security/dependabot`, `/discussions`). There is no public page for a
+notification thread id, so that route is never generated.
+
+### GitHub screen keys
+
+| Key | Action |
+|-----|--------|
+| `←`/`→` or `h`/`l` | Switch section tab |
+| `↑`/`↓` or `j`/`k` | Move selection |
+| `o` | Open the selected item in your browser |
+| `m` | Mark the selected notification as read |
+| `r` | Refresh all sections now |
+| `q` / `Esc` | Back to the main menu |
+
+All fetching runs on background threads, so the UI never freezes while
+it talks to the GitHub API.
 
 ## Development
 

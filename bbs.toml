@@ -2,7 +2,24 @@
 title = "Lawrence's Launcher"
 subtitle = "Terminal Launcher v0.1"
 # Banner font: "shadow" (solid fill, default) or "lined" (same letterforms, horizontal-line fill)
-banner_style = "lined"
+banner_style = "shadow"
+# Accent color for banner, borders, and highlight. Any named color
+# (cyan, magenta, green, yellow, red, blue, white, ...) or "rainbow"
+# to cycle the accent through the full hue wheel.
+theme = "rainbow"
+# Slow color shimmer on the banner (true by default)
+banner_animation = true
+# Scrolling message-of-the-day ticker under the banner. Remove or empty
+# this list to hide the ticker row entirely.
+motd = [
+  "Welcome back, Lawrence",
+  "Press / to search, ? for help",
+  "← / → folds and unfolds categories",
+]
+
+# Items sharing a `category` are grouped under a foldable header, in the
+# order the categories first appear below. Items with no category are
+# listed last, ungrouped.
 
 [[items]]
 key = "1"
@@ -11,6 +28,7 @@ cmd = "claude"
 desc = "AI coding assistant"
 icon = "CC"
 color = "cyan"
+category = "Develop"
 
 [[items]]
 key = "2"
@@ -19,6 +37,7 @@ cmd = "nvim"
 desc = "Text editor"
 icon = "NV"
 color = "green"
+category = "Develop"
 
 [[items]]
 key = "3"
@@ -27,14 +46,16 @@ cmd = "kilo"
 desc = "AI coding agent CLI"
 icon = "K"
 color = "magenta"
+category = "Develop"
 
 [[items]]
-key = "4"
-label = "Netlify CLI"
-cmd = "netlify"
-desc = "Deploy to Netlify"
-icon = "NT"
-color = "blue"
+key = "8"
+label = "Python REPL"
+cmd = "python"
+desc = "Python interactive"
+icon = "PY"
+color = "yellow"
+category = "Develop"
 
 [[items]]
 key = "5"
@@ -43,6 +64,9 @@ cmd = "git status"
 desc = "Check git status"
 icon = "GS"
 color = "yellow"
+category = "Source Control"
+# Wait for Enter before returning to the menu, so the output doesn't vanish
+pause = true
 
 [[items]]
 key = "6"
@@ -51,6 +75,26 @@ cmd = "lazygit"
 desc = "Git TUI"
 icon = "LG"
 color = "red"
+category = "Source Control"
+
+[[items]]
+key = "9"
+label = "GitHub"
+# No `cmd`: this item opens the built-in GitHub dashboard screen.
+desc = "All-in-one GitHub dashboard"
+icon = "GH"
+color = "white"
+screen = "github"
+category = "Source Control"
+
+[[items]]
+key = "4"
+label = "Netlify CLI"
+cmd = "netlify"
+desc = "Deploy to Netlify"
+icon = "NT"
+color = "blue"
+category = "System"
 
 [[items]]
 key = "7"
@@ -60,14 +104,7 @@ desc = "System monitor"
 icon = "BT"
 color = "green"
 wsl = true
-
-[[items]]
-key = "8"
-label = "Python REPL"
-cmd = "python"
-desc = "Python interactive"
-icon = "PY"
-color = "yellow"
+category = "System"
 
 [[items]]
 key = "Q"
@@ -76,3 +113,16 @@ cmd = "exit"
 desc = "Close launcher"
 icon = "QQ"
 color = "red"
+
+# Customize the GitHub dashboard screen. Omit this whole section for
+# defaults: all six sections, 25 per page, refresh every 120s.
+[github]
+# Sections shown, in order. Unknown names are ignored. Uncomment to
+# pick a subset:
+# sections = ["notifications", "pull_requests", "issues", "stars", "gists", "profile"]
+per_page = 25
+refresh_secs = 120
+# Repo affiliation for the Issues and Pull Requests sections: comma-
+# separated subset of owner, collaborator (write access), and
+# organization_member. Defaults to all three.
+# affiliation = "owner,collaborator,organization_member"
