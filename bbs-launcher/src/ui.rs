@@ -255,8 +255,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 fn draw_banner(frame: &mut Frame, area: Rect, app: &App) {
     let (br, bg, bb) = theme_rgb(app.accent());
     let rainbow = app.theme == Theme::Rainbow;
-    let animate = app.config.bbs.banner_animation.unwrap_or(true);
-    let phase = if animate { app.tick as f32 * 0.12 } else { 0.0 };
+    // `app.animate` rather than re-reading the config: one source of
+    // truth, so the banner and the border chase can never disagree
+    // about whether animation is on.
+    let phase = if app.animate {
+        app.tick as f32 * 0.12
+    } else {
+        0.0
+    };
 
     let banner_lines: Vec<Line> = app
         .banner
@@ -1312,6 +1318,51 @@ mod tests {
             app.on_tick();
         }
         assert_ne!(before, border_colors(&mut app).1, "the band should move");
+    }
+
+    /// The banner's colours, which is where its animation lives — the
+    /// glyphs themselves never change, so comparing rendered text would
+    /// miss it entirely.
+    fn banner_colors(app: &mut App) -> Vec<Color> {
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 32)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..8u16)
+            .flat_map(|y| (0..110u16).map(move |x| (x, y)))
+            .filter(|&(x, y)| buf[(x, y)].symbol().trim() != "")
+            .map(|(x, y)| buf[(x, y)].fg)
+            .collect()
+    }
+
+    #[test]
+    fn animation_toggle_governs_banner_and_chase_together() {
+        use crate::app::Theme;
+
+        // Deliberately avoids the rendered text: the footer carries a
+        // wall clock, so a text comparison would be flaky, and the
+        // banner animates in colour rather than in glyphs anyway.
+        let mut app = test_app();
+        app.theme = Theme::Rainbow;
+
+        // Frozen: ticks move neither the banner nor the chase.
+        app.animate = false;
+        let banner = banner_colors(&mut app);
+        let borders = border_colors(&mut app).1;
+        for _ in 0..30 {
+            app.on_tick();
+        }
+        assert_eq!(banner, banner_colors(&mut app), "banner should be frozen");
+        assert_eq!(borders, border_colors(&mut app).1, "chase should be frozen");
+
+        // Running: both move.
+        app.animate = true;
+        let banner = banner_colors(&mut app);
+        let borders = border_colors(&mut app).1;
+        for _ in 0..30 {
+            app.on_tick();
+        }
+        assert_ne!(banner, banner_colors(&mut app), "banner should animate");
+        assert_ne!(borders, border_colors(&mut app).1, "chase should animate");
     }
 
     #[test]

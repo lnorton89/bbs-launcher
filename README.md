@@ -22,12 +22,14 @@ bbs-launcher/src/
 
 ## Features
 
-- 🎨 **Retro BBS aesthetic** - ASCII art banner, cyan-on-dark theme, smooth animations
+- 🎨 **Retro BBS aesthetic** - ASCII art banner, configurable accent colour, smooth animations
+- 🌈 **Border chase** - A light travels around every pane like an LED strip
 - ⌨️ **Keyboard-driven** - Navigate with `↑/↓` or `j/k`, select with `Enter`, quit with `q`
-- ⚡ **Instant launching** - Pick a command and it fires immediately
+- ⚡ **Instant launching** - Pick a command and it fires; you land back on the menu when it exits
 - 🔧 **TOML config** - Easy-to-edit `bbs.toml` for all your shortcuts
 - 🔍 **Fuzzy search** - Press `/` and type; `lzg` finds Lazygit
 - 🗂️ **Foldable categories** - Group items under collapsible headers
+- 📺 **Scrolling MOTD** - A marquee of your own messages under the banner
 - 📊 **Launch stats** - Remembers what you run and when
 - 🐙 **GitHub dashboard screen** - A built-in, customizable all-in-one view (notifications, PRs, issues, starred repos, gists, profile) reusing your `gh` login — no extra tokens to manage
 - 📺 **Complex menu items** - Items can open built-in screens instead of just running a command
@@ -75,6 +77,28 @@ desc = "Close launcher"
 icon = "QQ"
 color = "red"
 ```
+
+The first config found wins, so a `bbs.toml` beside the binary overrides
+one in `~/.config`. `--config FILE` skips the search entirely, and
+`--list` prints which file was used.
+
+### `[bbs]` options
+
+Everything here is optional except `title`.
+
+| Option | Default | Effect |
+|--------|---------|--------|
+| `title` | — | Shown in the banner's top border |
+| `subtitle` | none | Shown centred in the banner's bottom border |
+| `banner_style` | `"shadow"` | Block-letter font: `shadow` (solid fill) or `lined` (horizontal-line fill). `lines`, `hatch`, and `striped` are accepted aliases |
+| `theme` | `"cyan"` | Accent colour, or `rainbow` — see [Theming](#theming) |
+| `banner_animation` | `true` | Animate the banner shimmer and the border chase |
+| `border_chase` | `true` | Travelling light around every pane border |
+| `chase_lap_secs` | `12.0` | Seconds per lap of the chase; lower is faster (clamped to 0.5–600) |
+| `motd` | none | Lines for the scrolling ticker — see [Message of the Day](#message-of-the-day) |
+
+The banner itself is your machine's hostname, uppercased; it isn't
+configurable.
 
 ### Run
 
@@ -259,9 +283,9 @@ letters, rather than every glyph sharing one shifting tint.
 ## GitHub Dashboard
 
 A built-in screen that shows your GitHub activity in one place: unread
-notifications, PRs and issues assigned to you, starred repos, gists, and
-your profile. It reuses your existing GitHub CLI login, so set that up
-once and you're done:
+notifications, open PRs and issues across the repos you work on, starred
+repos, gists, and your profile. It reuses your existing GitHub CLI login,
+so set that up once and you're done:
 
 ```bash
 winget install GitHub.cli
@@ -293,7 +317,7 @@ optional — defaults shown):
 # Default: all six below.
 sections = ["notifications", "pull_requests", "issues", "stars", "gists", "profile"]
 per_page = 25          # max entries per section (1-100)
-refresh_secs = 120     # auto-refresh while the screen is open
+refresh_secs = 120     # auto-refresh while the screen is open (minimum 5)
 # Repo affiliation for the Issues and Pull Requests sections: comma-
 # separated subset of owner, collaborator (write access), and
 # organization_member. Defaults to all three.
@@ -334,14 +358,28 @@ it talks to the GitHub API.
 ```bash
 cargo run
 cargo build --release
+cargo test
+cargo clippy --all-targets
+```
+
+Two tests are `#[ignore]`d because they aren't plain assertions:
+
+```bash
+# Print the whole rendered screen — handy for eyeballing layout changes
+cargo test snapshot -- --ignored --nocapture
+
+# Hit the real GitHub API; needs `gh` installed and authenticated
+cargo test live_fetch_all_sections -- --ignored --nocapture
 ```
 
 ## Planned
 
-- [ ] Sound effects (optional module)
-- [ ] Categories / tabbed menus
-- [ ] Search/filter
 - [ ] PowerShell/CMD/Tabby auto-launch
 - [ ] Plugin system
 - [ ] Weather widget
 - [ ] System stats panel
+
+Done since this list was written: foldable categories, fuzzy search, the
+GitHub dashboard, launch stats, the MOTD ticker, and the border chase.
+Sound effects were dropped — the `cpal` dependency was pulling in the
+whole Windows audio stack unused, so it was removed.
