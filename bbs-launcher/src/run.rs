@@ -19,7 +19,9 @@ use std::io;
 use std::time::{Duration, Instant};
 
 pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<()> {
-    let tick_rate = Duration::from_millis(100);
+    // Single source of truth with the animation code, which converts
+    // configured durations into per-tick steps using the same rate.
+    let tick_rate = Duration::from_secs_f32(1.0 / crate::app::TICKS_PER_SEC);
     let mut next_tick = Instant::now();
     // Redraw only when something actually changed. Drawing once per loop
     // iteration instead meant every stray input event — mouse motion in

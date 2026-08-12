@@ -7,6 +7,18 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Instant;
 
+/// UI ticks per second. Animation phases are derived from the tick
+/// counter, so this is what converts configured durations into the
+/// per-tick steps the drawing code works in.
+pub const TICKS_PER_SEC: f32 = 10.0;
+
+/// Seconds for one lap of the rainbow border chase when unconfigured.
+const DEFAULT_CHASE_LAP_SECS: f32 = 12.0;
+
+/// Fast enough to still read as a chase, slow enough not to strobe.
+const MIN_CHASE_LAP_SECS: f32 = 0.5;
+const MAX_CHASE_LAP_SECS: f32 = 600.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
@@ -62,6 +74,11 @@ pub struct App {
     pub theme: Theme,
     /// Whether the banner/accent animates (config `banner_animation`).
     pub animate: bool,
+    /// Whether the travelling border light runs at all.
+    pub chase: bool,
+    /// Degrees the border chase advances per tick, derived from the
+    /// configured lap time.
+    pub chase_degrees_per_tick: f32,
     /// Where the menu was last drawn, for mouse hit-testing.
     pub menu_area: Option<Rect>,
     pub last_click: Option<(Instant, usize)>,
@@ -92,6 +109,16 @@ impl App {
             .map(Theme::parse)
             .unwrap_or(Theme::Solid(Color::Cyan));
         let animate = config.bbs.banner_animation.unwrap_or(true);
+        // Reject NaN/infinity before clamping, so a nonsense value falls
+        // back to the default rather than freezing the chase.
+        let chase_lap_secs = config
+            .bbs
+            .chase_lap_secs
+            .filter(|s| s.is_finite())
+            .map(|s| s.clamp(MIN_CHASE_LAP_SECS, MAX_CHASE_LAP_SECS))
+            .unwrap_or(DEFAULT_CHASE_LAP_SECS);
+        let chase_degrees_per_tick = 360.0 / (chase_lap_secs * TICKS_PER_SEC);
+        let chase = config.bbs.border_chase.unwrap_or(true);
         let github = GithubView::new(config.github.clone());
         // Blank/whitespace-only entries are dropped so a stray empty
         // string in the config can't produce a row of dead space.
@@ -122,6 +149,8 @@ impl App {
             tick: 0,
             theme,
             animate,
+            chase,
+            chase_degrees_per_tick,
             menu_area: None,
             last_click: None,
             session_start: Instant::now(),

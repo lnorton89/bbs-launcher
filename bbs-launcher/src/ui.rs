@@ -41,25 +41,44 @@ fn is_border_glyph(symbol: &str) -> bool {
         .is_some_and(|c| ('\u{2500}'..='\u{257F}').contains(&c))
 }
 
-/// Degrees of hue the chase travels per tick (10 ticks/sec), i.e. one
-/// full lap of the colour wheel roughly every 12 seconds.
-const CHASE_DEGREES_PER_TICK: f32 = 3.0;
+/// What the travelling border light is made of.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ChaseStyle {
+    /// Sweep the full hue wheel around the outline.
+    Hue,
+    /// Hold one colour and chase a dim band through it.
+    DimBand(u8, u8, u8),
+}
 
-/// Paints a travelling rainbow around the border of `area`, like an LED
-/// strip: hue advances with distance clockwise around the perimeter and
-/// drifts with time, so one full wheel is spread over the whole outline
-/// and adjacent cells differ by only a degree or two. A slow brightness
-/// wave rides along at the same speed, giving the light somewhere to
-/// visibly travel even across stretches where neighbouring hues are
-/// nearly identical.
-fn rainbow_chase(frame: &mut Frame, area: Rect, tick: u64, animate: bool) {
+/// Paints a travelling light around the border of `area`, like an LED
+/// strip. Position along the perimeter drives the effect and the whole
+/// pattern drifts with time, so it reads as light moving clockwise
+/// rather than as cells blinking independently.
+///
+/// Under [`ChaseStyle::Hue`] one full wheel is spread over the outline,
+/// so adjacent cells differ by only a degree or two, with a gentle
+/// brightness wave riding along to give the motion something to show
+/// even where neighbouring hues are nearly identical. Under
+/// [`ChaseStyle::DimBand`] the hue is fixed and a narrow dimmed segment
+/// travels through it instead.
+///
+/// `degrees_per_tick` sets the speed; it comes from the configured lap
+/// time (see `chase_lap_secs`).
+fn border_chase(
+    frame: &mut Frame,
+    area: Rect,
+    tick: u64,
+    animate: bool,
+    degrees_per_tick: f32,
+    style: ChaseStyle,
+) {
     if area.width < 2 || area.height < 2 {
         return;
     }
     let (w, h) = (area.width as u32, area.height as u32);
     let perimeter = (2 * (w - 1) + 2 * (h - 1)) as f32;
     let phase_deg = if animate {
-        tick as f32 * CHASE_DEGREES_PER_TICK
+        tick as f32 * degrees_per_tick
     } else {
         0.0
     };
@@ -74,12 +93,33 @@ fn rainbow_chase(frame: &mut Frame, area: Rect, tick: u64, animate: bool) {
             return;
         }
         let t = pos as f32 / perimeter;
-        let hue = (t * 360.0 - phase_deg).rem_euclid(360.0);
-        // Stays well clear of 0 so the dim part of the wave still reads
-        // as coloured light rather than going muddy.
-        let glow = 0.68 + 0.32 * (t * std::f32::consts::TAU - phase_rad).sin();
-        let (r, g, b) = hsv_to_rgb(hue, 0.85, glow);
-        cell.set_fg(Color::Rgb(r, g, b));
+        let wave = (t * std::f32::consts::TAU - phase_rad).sin();
+        let color = match style {
+            ChaseStyle::Hue => {
+                let hue = (t * 360.0 - phase_deg).rem_euclid(360.0);
+                // Stays well clear of 0 so the dim part of the wave
+                // still reads as coloured light rather than going muddy.
+                let glow = 0.68 + 0.32 * wave;
+                let (r, g, b) = hsv_to_rgb(hue, 0.85, glow);
+                Color::Rgb(r, g, b)
+            }
+            ChaseStyle::DimBand(r, g, b) => {
+                // Raising the normalised wave to a fractional power
+                // pushes most of the lap up near full brightness, so the
+                // dark part stays a narrow band travelling through the
+                // theme colour instead of an even half-lit/half-dark
+                // split. The floor keeps the band visible rather than
+                // punching a hole in the border.
+                let lit = (0.5 + 0.5 * wave).powf(0.4);
+                let level = DIM_FLOOR + (1.0 - DIM_FLOOR) * lit;
+                Color::Rgb(
+                    (r as f32 * level) as u8,
+                    (g as f32 * level) as u8,
+                    (b as f32 * level) as u8,
+                )
+            }
+        };
+        cell.set_fg(color);
     };
 
     // Walk the outline clockwise from the top-left so `pos` measures
@@ -105,14 +145,32 @@ fn rainbow_chase(frame: &mut Frame, area: Rect, tick: u64, animate: bool) {
     }
 }
 
-/// Applies the chase to every bordered pane when the rainbow theme is
-/// active; a no-op for solid themes.
+/// How far the dim band drops below the theme colour at its darkest.
+const DIM_FLOOR: f32 = 0.3;
+
+/// Applies the travelling border light to every bordered pane, in
+/// whichever form suits the active theme. A no-op when the chase is
+/// switched off.
 fn apply_chase(frame: &mut Frame, app: &App, areas: &[Rect]) {
-    if app.theme != Theme::Rainbow {
+    if !app.chase {
         return;
     }
+    let style = match app.theme {
+        Theme::Rainbow => ChaseStyle::Hue,
+        Theme::Solid(color) => {
+            let (r, g, b) = theme_rgb(color);
+            ChaseStyle::DimBand(r, g, b)
+        }
+    };
     for area in areas {
-        rainbow_chase(frame, *area, app.tick, app.animate);
+        border_chase(
+            frame,
+            *area,
+            app.tick,
+            app.animate,
+            app.chase_degrees_per_tick,
+            style,
+        );
     }
 }
 
@@ -1032,9 +1090,19 @@ mod tests {
     /// from the top-left corner. Each entry carries its distance along
     /// the perimeter, because a title interrupts the run of border
     /// glyphs and the cells either side of it are not neighbours.
-    fn border_colors(app: &mut App, area: Rect) -> Vec<(u32, (u8, u8, u8))> {
+    /// Returns the menu pane's rect alongside its border colours. The
+    /// rect comes from what the app actually drew rather than being
+    /// hardcoded, so a layout change can't silently make these tests
+    /// sample interior cells instead of the border.
+    type Rgb = (u8, u8, u8);
+    /// A border cell: how far along the perimeter it sits, and the
+    /// colour it was rendered in.
+    type BorderCell = (u32, Rgb);
+
+    fn border_colors(app: &mut App) -> (Rect, Vec<BorderCell>) {
         let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 32)).unwrap();
         terminal.draw(|f| draw(f, app)).unwrap();
+        let area = app.menu_area.expect("draw records the menu area");
         let buf = terminal.backend().buffer().clone();
         let (x0, y0) = (area.x, area.y);
         let (x1, y1) = (area.x + area.width - 1, area.y + area.height - 1);
@@ -1043,7 +1111,7 @@ mod tests {
         coords.extend(((y0 + 1)..=y1).map(|y| (x1, y)));
         coords.extend((x0..x1).rev().map(|x| (x, y1)));
         coords.extend(((y0 + 1)..y1).rev().map(|y| (x0, y)));
-        coords
+        let colors = coords
             .into_iter()
             .enumerate()
             .filter(|&(_, (x, y))| is_border_glyph(buf[(x, y)].symbol()))
@@ -1051,25 +1119,23 @@ mod tests {
                 Color::Rgb(r, g, b) => Some((pos as u32, (r, g, b))),
                 _ => None,
             })
-            .collect()
+            .collect();
+        (area, colors)
     }
 
     #[test]
     fn rainbow_chase_is_a_smooth_travelling_gradient() {
         use crate::app::Theme;
-        // The menu pane, per the layout in `draw`.
-        let area = Rect::new(0, 9, 68, 20);
-
         let mut app = test_app();
         app.theme = Theme::Rainbow;
         app.animate = true;
 
-        let colors = border_colors(&mut app, area);
+        let (area, colors) = border_colors(&mut app);
         assert!(colors.len() > 50, "expected a full border of cells");
 
         // Diffused, not banded: cells that really are adjacent stay
         // close in colour, all the way around including the corners.
-        let step = |a: (u8, u8, u8), b: (u8, u8, u8)| {
+        let step = |a: Rgb, b: Rgb| {
             (a.0 as i32 - b.0 as i32).abs().max(
                 (a.1 as i32 - b.1 as i32)
                     .abs()
@@ -1104,7 +1170,7 @@ mod tests {
         for _ in 0..TICKS {
             app.on_tick();
         }
-        let later = border_colors(&mut app, area);
+        let later = border_colors(&mut app).1;
         assert_ne!(colors, later, "the chase should move over time");
 
         // And it travels as a chase — the whole pattern slides clockwise
@@ -1112,11 +1178,11 @@ mod tests {
         // independently. After TICKS, the light at position p is what
         // used to be at p - shift.
         let perimeter = f32::from(2 * (area.width - 1) + 2 * (area.height - 1));
-        let shift =
-            (TICKS as f32 * CHASE_DEGREES_PER_TICK / 360.0 * perimeter).round() as u32;
+        let shift = (TICKS as f32 * app.chase_degrees_per_tick / 360.0 * perimeter)
+            .round() as u32;
         assert!(shift > 0, "the test needs enough ticks to move the pattern");
 
-        let earlier: std::collections::HashMap<u32, (u8, u8, u8)> =
+        let earlier: std::collections::HashMap<u32, Rgb> =
             colors.iter().copied().collect();
         let mut compared = 0;
         let mut worst = 0;
@@ -1136,15 +1202,128 @@ mod tests {
     }
 
     #[test]
-    fn solid_themes_keep_a_plain_border() {
-        let area = Rect::new(0, 9, 68, 20);
+    fn chase_lap_secs_sets_the_speed_and_rejects_nonsense() {
+        use crate::app::{Theme, TICKS_PER_SEC};
+
+        let lap_of = |configured: Option<f32>| {
+            let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("bbs.toml");
+            let (mut config, path) =
+                crate::config::load_config(Some(config_path)).unwrap();
+            config.bbs.chase_lap_secs = configured;
+            let app = App::new(config, path);
+            // Invert the conversion to recover the effective lap time.
+            360.0 / (app.chase_degrees_per_tick * TICKS_PER_SEC)
+        };
+
+        let approx = |a: f32, b: f32| (a - b).abs() < 0.01;
+        assert!(approx(lap_of(Some(4.0)), 4.0), "a plain value is honoured");
+        assert!(approx(lap_of(None), 12.0), "unset falls back to the default");
+        // Out-of-range and non-finite values clamp or fall back rather
+        // than producing a strobe or a frozen border.
+        assert!(approx(lap_of(Some(0.0)), 0.5), "too fast clamps up");
+        assert!(approx(lap_of(Some(-3.0)), 0.5), "negative clamps up");
+        assert!(approx(lap_of(Some(99_999.0)), 600.0), "too slow clamps down");
+        assert!(approx(lap_of(Some(f32::NAN)), 12.0), "NaN falls back");
+        assert!(approx(lap_of(Some(f32::INFINITY)), 12.0), "inf falls back");
+
+        // A faster lap really does move the pattern further per tick.
+        let sample = |lap: f32| {
+            let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("bbs.toml");
+            let (mut config, path) =
+                crate::config::load_config(Some(config_path)).unwrap();
+            config.bbs.chase_lap_secs = Some(lap);
+            let mut app = App::new(config, path);
+            app.theme = Theme::Rainbow;
+            app.animate = true;
+            let before = border_colors(&mut app).1;
+            app.on_tick();
+            let after = border_colors(&mut app).1;
+            // Total colour movement across the strip after one tick.
+            before
+                .iter()
+                .zip(after.iter())
+                .map(|((_, a), (_, b))| {
+                    (a.0 as i32 - b.0 as i32).abs()
+                        + (a.1 as i32 - b.1 as i32).abs()
+                        + (a.2 as i32 - b.2 as i32).abs()
+                })
+                .sum::<i32>()
+        };
+        assert!(
+            sample(2.0) > sample(60.0),
+            "a shorter lap should advance the chase further each tick"
+        );
+    }
+
+    #[test]
+    fn solid_themes_chase_a_dim_band_in_their_own_colour() {
+        use crate::app::Theme;
+        let mut app = test_app();
+        app.theme = Theme::Solid(Color::Cyan);
+        app.animate = true;
+
+        let colors = border_colors(&mut app).1;
+        assert!(colors.len() > 50, "expected a full border of cells");
+
+        // One hue throughout: every cell is the theme colour at some
+        // brightness, so normalising by the brightest channel gives the
+        // same chromaticity everywhere.
+        let chroma = |(r, g, b): Rgb| {
+            let m = r.max(g).max(b).max(1) as f32;
+            (r as f32 / m, g as f32 / m, b as f32 / m)
+        };
+        let first = chroma(colors[0].1);
+        for (_, c) in &colors {
+            let k = chroma(*c);
+            let off = (k.0 - first.0)
+                .abs()
+                .max((k.1 - first.1).abs())
+                .max((k.2 - first.2).abs());
+            assert!(off < 0.05, "solid chase must not shift hue, saw {c:?}");
+        }
+
+        // But brightness does vary — that is the band.
+        let level = |(r, g, b): Rgb| r as u32 + g as u32 + b as u32;
+        let dimmest = colors.iter().map(|(_, c)| level(*c)).min().unwrap();
+        let brightest = colors.iter().map(|(_, c)| level(*c)).max().unwrap();
+        assert!(
+            dimmest * 2 < brightest,
+            "expected a clearly dim band ({dimmest} vs {brightest})"
+        );
+
+        // Mostly lit, with the darkness confined to a travelling band
+        // rather than half the border.
+        let midpoint = (dimmest + brightest) / 2;
+        let lit = colors.iter().filter(|(_, c)| level(*c) > midpoint).count();
+        assert!(
+            lit * 2 > colors.len(),
+            "the band should be narrower than the lit stretch"
+        );
+
+        // And it travels.
+        let before = colors;
+        for _ in 0..12 {
+            app.on_tick();
+        }
+        assert_ne!(before, border_colors(&mut app).1, "the band should move");
+    }
+
+    #[test]
+    fn border_chase_can_be_switched_off() {
         let mut app = test_app();
         app.theme = crate::app::Theme::Solid(Color::Cyan);
-        // A solid theme leaves borders on their named colour, so no cell
-        // carries an Rgb fg from the chase.
+        app.chase = false;
+        // With the chase off, borders keep their plain named colour and
+        // no cell carries an Rgb fg.
         assert!(
-            border_colors(&mut app, area).is_empty(),
-            "the chase must not run for solid themes"
+            border_colors(&mut app).1.is_empty(),
+            "no cell should be repainted when the chase is disabled"
         );
     }
 

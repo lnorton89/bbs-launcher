@@ -7,8 +7,16 @@ banner_style = "shadow"
 # (cyan, magenta, green, yellow, red, blue, white, ...) or "rainbow"
 # to cycle the accent through the full hue wheel.
 theme = "rainbow"
-# Slow color shimmer on the banner (true by default)
+# Slow color shimmer on the banner (true by default). Also drives the
+# border chase; set false to freeze both into a static gradient.
 banner_animation = true
+# Travelling light around every pane border (true by default). Under
+# "rainbow" it sweeps the hue wheel; under a solid theme it chases a dim
+# band through the theme color.
+border_chase = true
+# Seconds for the chase to travel one full lap of a pane. Lower is
+# faster. Clamped to 0.5-600; default 12.
+chase_lap_secs = 12.0
 # Scrolling message-of-the-day ticker under the banner. Remove or empty
 # this list to hide the ticker row entirely.
 motd = [

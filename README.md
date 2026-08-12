@@ -231,21 +231,30 @@ through the full hue wheel:
 [bbs]
 theme = "rainbow"           # or e.g. "cyan"
 banner_animation = true     # slow shimmer; false = static accent
+border_chase = true         # travelling light around every pane border
+chase_lap_secs = 12.0       # seconds per lap; lower is faster
 ```
 
-With `rainbow`, the accent walks the hue wheel and two extra effects kick
-in:
+### Border chase
 
-- **Border chase** — every bordered pane gets a travelling gradient, like
-  an LED strip. One full turn of the colour wheel is spread around each
-  outline, so neighbouring cells differ by only a degree or two, and the
-  whole pattern slides clockwise (a lap roughly every 12 seconds). A soft
-  brightness wave rides along with it so the light visibly moves even
-  across stretches where the hues are nearly identical.
-- **Banner gradient** — the block letters carry the wheel across
-  themselves rather than all sharing one tint.
+Every bordered pane gets a light travelling clockwise around its outline,
+like an LED strip. What travels depends on the theme:
 
-Set `banner_animation = false` to freeze both into a static gradient.
+- **`rainbow`** — a full turn of the colour wheel is spread around each
+  outline, so neighbouring cells differ by only a degree or two and the
+  gradient reads as diffused rather than banded. A soft brightness wave
+  rides along so the motion is visible even where the hues are nearly
+  identical.
+- **Any solid colour** — the hue stays put and a narrow dim band chases
+  through it instead, so the border mostly sits at your theme colour with
+  a shadow running around it.
+
+`chase_lap_secs` is how long one lap takes, so smaller numbers are
+faster. Set `border_chase = false` for plain borders, or
+`banner_animation = false` to freeze the pattern into a static gradient.
+
+The `rainbow` theme also spreads the wheel across the banner's block
+letters, rather than every glyph sharing one shifting tint.
 
 ## GitHub Dashboard
 

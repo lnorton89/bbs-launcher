@@ -75,6 +75,15 @@ pub struct BbsHeader {
     pub theme: Option<String>,
     /// Animate the banner with a slow color shimmer. Defaults to true.
     pub banner_animation: Option<bool>,
+    /// Run a travelling light around every pane border. Under `rainbow`
+    /// it sweeps the hue wheel; under a solid theme it chases a dim band
+    /// through the theme colour. Defaults to true; needs
+    /// `banner_animation` on to actually move.
+    pub border_chase: Option<bool>,
+    /// Seconds for the border chase to travel one full lap of a pane.
+    /// Lower is faster. Defaults to 12; values outside 0.5-600 are
+    /// clamped.
+    pub chase_lap_secs: Option<f32>,
     /// Message-of-the-day lines, shown as a scrolling ticker under the
     /// banner. Omit (or leave empty) to hide the ticker entirely.
     pub motd: Option<Vec<String>>,
