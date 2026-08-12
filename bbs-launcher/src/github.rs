@@ -37,7 +37,7 @@ enum Msg {
 
 /// One selectable row in a GitHub section, plus everything the details
 /// pane needs to render.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Entry {
     pub title: String,
     pub subtitle: String,
@@ -45,6 +45,85 @@ pub struct Entry {
     pub url: Option<String>,
     /// (label, value) pairs shown in the details pane.
     pub detail: Vec<(String, String)>,
+    /// Sort keys for client-side re-sorting. Only the Repos section
+    /// fills this in; everywhere else keeps server order.
+    pub sort: Option<RepoSortKeys>,
+}
+
+/// The stats a repo row can be sorted by, extracted at parse time so a
+/// sort never has to re-read the display strings.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RepoSortKeys {
+    pub name: String,
+    pub stars: u64,
+    pub forks: u64,
+    pub open_issues: u64,
+    /// Last push as epoch seconds; 0 when the repo has no pushes.
+    pub pushed: i64,
+}
+
+/// Active sort order for the Repos section. Numeric sorts run
+/// descending (biggest first); name sorts ascending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RepoSort {
+    #[default]
+    Pushed,
+    Stars,
+    Forks,
+    OpenIssues,
+    Name,
+}
+
+impl RepoSort {
+    const CYCLE: [RepoSort; 5] = [
+        RepoSort::Pushed,
+        RepoSort::Stars,
+        RepoSort::Forks,
+        RepoSort::OpenIssues,
+        RepoSort::Name,
+    ];
+
+    pub fn parse(s: &str) -> Option<RepoSort> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "pushed" | "updated" | "recent" => Some(RepoSort::Pushed),
+            "stars" | "stargazers" => Some(RepoSort::Stars),
+            "forks" => Some(RepoSort::Forks),
+            "issues" | "open_issues" => Some(RepoSort::OpenIssues),
+            "name" | "alpha" => Some(RepoSort::Name),
+            _ => None,
+        }
+    }
+
+    fn next(self) -> RepoSort {
+        let i = Self::CYCLE.iter().position(|s| *s == self).unwrap_or(0);
+        Self::CYCLE[(i + 1) % Self::CYCLE.len()]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RepoSort::Pushed => "recent push",
+            RepoSort::Stars => "stars",
+            RepoSort::Forks => "forks",
+            RepoSort::OpenIssues => "open issues",
+            RepoSort::Name => "name",
+        }
+    }
+}
+
+/// Sorts repo entries by the given key. Stable, so ties keep their
+/// previous relative order; entries without keys sink to the bottom.
+fn sort_repo_entries(entries: &mut [Entry], sort: RepoSort) {
+    let key = |e: &Entry| e.sort.clone().unwrap_or_default();
+    entries.sort_by(|a, b| {
+        let (ka, kb) = (key(a), key(b));
+        match sort {
+            RepoSort::Pushed => kb.pushed.cmp(&ka.pushed),
+            RepoSort::Stars => kb.stars.cmp(&ka.stars),
+            RepoSort::Forks => kb.forks.cmp(&ka.forks),
+            RepoSort::OpenIssues => kb.open_issues.cmp(&ka.open_issues),
+            RepoSort::Name => ka.name.to_lowercase().cmp(&kb.name.to_lowercase()),
+        }
+    });
 }
 
 /// The customizable sections of the dashboard, in display order.
@@ -53,16 +132,18 @@ pub enum SectionKind {
     Notifications,
     PullRequests,
     Issues,
+    Repos,
     Stars,
     Gists,
     Profile,
 }
 
 impl SectionKind {
-    pub const ALL: [SectionKind; 6] = [
+    pub const ALL: [SectionKind; 7] = [
         SectionKind::Notifications,
         SectionKind::PullRequests,
         SectionKind::Issues,
+        SectionKind::Repos,
         SectionKind::Stars,
         SectionKind::Gists,
         SectionKind::Profile,
@@ -73,7 +154,10 @@ impl SectionKind {
             "notifications" | "notif" | "inbox" => Some(SectionKind::Notifications),
             "pull_requests" | "pullrequests" | "prs" | "pr" => Some(SectionKind::PullRequests),
             "issues" | "issue" => Some(SectionKind::Issues),
-            "stars" | "starred" | "repos" => Some(SectionKind::Stars),
+            // "repos" used to alias the Stars section before this one
+            // existed; it now means the user's own repositories.
+            "repos" | "repositories" | "repositories_mine" => Some(SectionKind::Repos),
+            "stars" | "starred" => Some(SectionKind::Stars),
             "gists" => Some(SectionKind::Gists),
             "profile" | "account" | "me" => Some(SectionKind::Profile),
             _ => None,
@@ -85,6 +169,7 @@ impl SectionKind {
             SectionKind::Notifications => "Notifications",
             SectionKind::PullRequests => "Pull Requests",
             SectionKind::Issues => "Issues",
+            SectionKind::Repos => "Repos",
             SectionKind::Stars => "Starred Repos",
             SectionKind::Gists => "Gists",
             SectionKind::Profile => "Profile",
@@ -103,6 +188,10 @@ impl SectionKind {
             SectionKind::PullRequests | SectionKind::Issues => vec![format!(
                 "/user/issues?filter=all&state=open&affiliation={affiliation}\
                  &sort=updated&direction=desc&per_page=100"
+            )],
+            SectionKind::Repos => vec![format!(
+                "/user/repos?affiliation={affiliation}&sort=pushed&direction=desc\
+                 &per_page={pp}"
             )],
             SectionKind::Stars => vec![format!("/user/starred?sort=updated&per_page={pp}")],
             SectionKind::Gists => vec![format!("/gists?per_page={pp}")],
@@ -124,6 +213,7 @@ impl SectionKind {
             // just because the other type dominates the sort order.
             SectionKind::PullRequests => parse_user_issues(&v, true, per_page).map(|e| (None, e)),
             SectionKind::Issues => parse_user_issues(&v, false, per_page).map(|e| (None, e)),
+            SectionKind::Repos => parse_repos(&v).map(|e| (None, e)),
             SectionKind::Stars => parse_stars(&v).map(|e| (None, e)),
             SectionKind::Gists => parse_gists(&v).map(|e| (None, e)),
             SectionKind::Profile => parse_profile(&v),
@@ -158,6 +248,8 @@ pub struct GithubView {
     pub status: String,
     /// Where the list pane was last drawn, for mouse hit-testing.
     pub list_area: Option<Rect>,
+    /// Active sort order for the Repos section.
+    pub repo_sort: RepoSort,
     /// Bumped each time the screen opens, so stale in-flight fetches
     /// from a previous visit can't overwrite fresh data.
     generation: u64,
@@ -194,6 +286,11 @@ impl GithubView {
             .map(|a| a.replace(' ', ""))
             .filter(|a| !a.is_empty())
             .unwrap_or_else(|| "owner,collaborator,organization_member".into());
+        let repo_sort = cfg
+            .repo_sort
+            .as_deref()
+            .and_then(RepoSort::parse)
+            .unwrap_or_default();
         let count = sections.len();
         let (tx, rx) = channel();
         GithubView {
@@ -210,6 +307,7 @@ impl GithubView {
             owner: None,
             status: "waiting for connection…".into(),
             list_area: None,
+            repo_sort,
             generation: 0,
             last_refresh: Instant::now(),
             tx,
@@ -305,8 +403,14 @@ impl GithubView {
                         self.loading[idx] = false;
                     }
                     match result {
-                        Ok(entries) => {
+                        Ok(mut entries) => {
                             if idx < self.entries.len() {
+                                // The repos list honours whatever sort
+                                // the user has dialled in, even across
+                                // refreshes.
+                                if self.sections.get(idx) == Some(&SectionKind::Repos) {
+                                    sort_repo_entries(&mut entries, self.repo_sort);
+                                }
                                 self.entries[idx] = entries;
                                 self.errors[idx] = None;
                                 if self.states[idx].selected().is_none()
@@ -456,6 +560,25 @@ impl GithubView {
         });
         self.status = "marking as read…".into();
     }
+
+    /// Steps the Repos tab to the next sort order and re-sorts in place,
+    /// keeping the cursor on the same repo so cycling never loses the
+    /// user's place. A no-op (with a hint) on any other tab.
+    pub fn cycle_repo_sort(&mut self) {
+        if self.sections.get(self.tab) != Some(&SectionKind::Repos) {
+            self.status = "sorting applies to the Repos tab".into();
+            return;
+        }
+        self.repo_sort = self.repo_sort.next();
+        let followed = self.selected_entry().map(|e| e.id.clone());
+        sort_repo_entries(&mut self.entries[self.tab], self.repo_sort);
+        if let Some(id) = followed {
+            if let Some(pos) = self.entries[self.tab].iter().position(|e| e.id == id) {
+                self.states[self.tab].select(Some(pos));
+            }
+        }
+        self.status = format!("repos sorted by {}", self.repo_sort.label());
+    }
 }
 
 /// Result of handling one key while the GitHub screen is open.
@@ -510,6 +633,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Nav {
         }
         KeyCode::Char('m') => {
             app.github.mark_selected_read();
+            Nav::Stay
+        }
+        KeyCode::Char('s') => {
+            app.github.cycle_repo_sort();
             Nav::Stay
         }
         _ => Nav::Stay,
@@ -603,6 +730,7 @@ fn parse_notifications(v: &serde_json::Value) -> Result<Vec<Entry>> {
                     ),
                     ("Updated".into(), pretty_date(&n.updated_at)),
                 ],
+                sort: None,
             }
         })
         .collect())
@@ -707,6 +835,98 @@ fn parse_user_issues(v: &serde_json::Value, want_prs: bool, limit: usize) -> Res
                     ("Created".into(), pretty_date(&i.created_at)),
                     ("Updated".into(), pretty_date(&i.updated_at)),
                 ],
+                sort: None,
+            }
+        })
+        .collect())
+}
+
+/// Parses a `/user/repos` response: every repo the user owns or has
+/// access to via the affiliation filter, with the stats the Repos tab
+/// shows and sorts by.
+fn parse_repos(v: &serde_json::Value) -> Result<Vec<Entry>> {
+    #[derive(serde::Deserialize)]
+    struct Item {
+        full_name: String,
+        description: Option<String>,
+        html_url: String,
+        private: bool,
+        fork: bool,
+        archived: bool,
+        language: Option<String>,
+        stargazers_count: u64,
+        forks_count: u64,
+        open_issues_count: u64,
+        /// Null for repos that have never been pushed to.
+        pushed_at: Option<String>,
+    }
+    let items: Vec<Item> = serde_json::from_value(v.clone()).context("bad repos payload")?;
+    Ok(items
+        .into_iter()
+        .map(|r| {
+            let pushed_secs = r
+                .pushed_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|d| d.timestamp())
+                .unwrap_or(0);
+            let language = r.language.clone().unwrap_or_else(|| "—".into());
+            // Compact stat line for the list row: stars, forks, open
+            // issues, language, then any flags that change how you'd
+            // treat the repo.
+            let mut subtitle = format!(
+                "★{} ⑂{} !{} · {}",
+                r.stargazers_count, r.forks_count, r.open_issues_count, language
+            );
+            for (on, flag) in [
+                (r.private, "private"),
+                (r.fork, "fork"),
+                (r.archived, "archived"),
+            ] {
+                if on {
+                    subtitle.push_str(" · ");
+                    subtitle.push_str(flag);
+                }
+            }
+            let mut detail = vec![
+                ("Stars".into(), r.stargazers_count.to_string()),
+                ("Forks".into(), r.forks_count.to_string()),
+                ("Open issues".into(), r.open_issues_count.to_string()),
+                ("Language".into(), language),
+                (
+                    "Visibility".into(),
+                    if r.private { "private".into() } else { "public".into() },
+                ),
+                (
+                    "Pushed".into(),
+                    r.pushed_at
+                        .as_deref()
+                        .map(pretty_date)
+                        .unwrap_or_else(|| "never".into()),
+                ),
+            ];
+            if r.fork {
+                detail.push(("Fork".into(), "yes".into()));
+            }
+            if r.archived {
+                detail.push(("Archived".into(), "yes".into()));
+            }
+            if let Some(desc) = r.description.filter(|d| !d.is_empty()) {
+                detail.push(("Description".into(), desc));
+            }
+            Entry {
+                title: r.full_name.clone(),
+                subtitle,
+                id: r.full_name.clone(),
+                url: Some(r.html_url),
+                detail,
+                sort: Some(RepoSortKeys {
+                    name: r.full_name,
+                    stars: r.stargazers_count,
+                    forks: r.forks_count,
+                    open_issues: r.open_issues_count,
+                    pushed: pushed_secs,
+                }),
             }
         })
         .collect())
@@ -751,6 +971,7 @@ fn parse_stars(v: &serde_json::Value) -> Result<Vec<Entry>> {
                 id: r.full_name,
                 url: Some(r.html_url),
                 detail,
+                sort: None,
             }
         })
         .collect())
@@ -799,6 +1020,7 @@ fn parse_gists(v: &serde_json::Value) -> Result<Vec<Entry>> {
                     ("Created".into(), pretty_date(&g.created_at)),
                     ("Updated".into(), pretty_date(&g.updated_at)),
                 ],
+                sort: None,
             }
         })
         .collect())
@@ -836,6 +1058,7 @@ fn parse_profile(v: &serde_json::Value) -> Result<(Option<String>, Vec<Entry>)> 
             ("Blog".into(), p.blog.unwrap_or_else(|| "—".into())),
             ("Joined".into(), pretty_date(&p.created_at)),
         ],
+        sort: None,
     };
     Ok((Some(p.login), vec![entry]))
 }
@@ -898,30 +1121,30 @@ mod tests {
             per_page: Some(500),
             refresh_secs: Some(2),
             affiliation: Some(" owner , collaborator ".into()),
+            repo_sort: Some("stars".into()),
         };
         let v = GithubView::new(Some(cfg));
         assert_eq!(v.sections, vec![SectionKind::Profile]);
         assert_eq!(v.per_page, 100);
         assert_eq!(v.refresh_secs, 5);
         assert_eq!(v.affiliation, "owner,collaborator");
+        assert_eq!(v.repo_sort, RepoSort::Stars);
 
         // All-invalid names fall back to the full set.
         let cfg = GithubConfig {
             sections: Some(vec!["wat".into()]),
-            per_page: None,
-            refresh_secs: None,
-            affiliation: None,
+            repo_sort: Some("wat".into()),
+            ..Default::default()
         };
         let v = GithubView::new(Some(cfg));
         assert_eq!(v.sections.len(), SectionKind::ALL.len());
         assert_eq!(v.affiliation, "owner,collaborator,organization_member");
+        assert_eq!(v.repo_sort, RepoSort::Pushed, "bad sort name falls back");
 
         // Blank affiliation falls back to the default too.
         let cfg = GithubConfig {
-            sections: None,
-            per_page: None,
-            refresh_secs: None,
             affiliation: Some("   ".into()),
+            ..Default::default()
         };
         let v = GithubView::new(Some(cfg));
         assert_eq!(v.affiliation, "owner,collaborator,organization_member");
@@ -991,6 +1214,10 @@ mod tests {
         assert_eq!(SectionKind::parse("notifications"), Some(SectionKind::Notifications));
         assert_eq!(SectionKind::parse("PRs"), Some(SectionKind::PullRequests));
         assert_eq!(SectionKind::parse("issue"), Some(SectionKind::Issues));
+        // "repos" means the user's own repositories (it used to alias
+        // Stars before the Repos section existed).
+        assert_eq!(SectionKind::parse("repos"), Some(SectionKind::Repos));
+        assert_eq!(SectionKind::parse("repositories"), Some(SectionKind::Repos));
         assert_eq!(SectionKind::parse("starred"), Some(SectionKind::Stars));
         assert_eq!(SectionKind::parse("gists"), Some(SectionKind::Gists));
         assert_eq!(SectionKind::parse("me"), Some(SectionKind::Profile));
@@ -1009,6 +1236,10 @@ mod tests {
         let args = SectionKind::Issues.gh_args(25, aff);
         assert!(args[0].starts_with("/user/issues?filter=all"));
         assert!(args[0].contains("sort=updated&direction=desc"));
+        let args = SectionKind::Repos.gh_args(25, aff);
+        assert!(args[0].starts_with("/user/repos?affiliation=owner,collaborator"));
+        assert!(args[0].contains("sort=pushed&direction=desc"));
+        assert!(args[0].contains("per_page=25"));
         let args = SectionKind::Notifications.gh_args(25, aff);
         assert!(args[0].starts_with("/notifications?per_page=25"));
         let args = SectionKind::Profile.gh_args(25, aff);
@@ -1188,6 +1419,144 @@ mod tests {
         assert_eq!(owner.as_deref(), Some("lnorton89"));
         assert_eq!(entries[0].title, "@lnorton89 — Lawrence");
         assert!(entries[0].detail.iter().any(|(k, _)| k == "Followers"));
+    }
+
+    /// Three repos with deliberately conflicting stat orderings, so
+    /// every sort key produces a different winner.
+    fn repo_fixture() -> serde_json::Value {
+        json(r#"[{
+            "full_name": "octo/zebra", "description": "stripes", "html_url": "https://github.com/octo/zebra",
+            "private": false, "fork": false, "archived": false, "language": "Rust",
+            "stargazers_count": 5, "forks_count": 9, "open_issues_count": 1,
+            "pushed_at": "2026-08-01T00:00:00Z"
+        }, {
+            "full_name": "octo/alpha", "description": null, "html_url": "https://github.com/octo/alpha",
+            "private": true, "fork": true, "archived": false, "language": null,
+            "stargazers_count": 50, "forks_count": 2, "open_issues_count": 7,
+            "pushed_at": "2026-06-01T00:00:00Z"
+        }, {
+            "full_name": "octo/mid", "description": "", "html_url": "https://github.com/octo/mid",
+            "private": false, "fork": false, "archived": true, "language": "Go",
+            "stargazers_count": 20, "forks_count": 4, "open_issues_count": 3,
+            "pushed_at": null
+        }]"#)
+    }
+
+    #[test]
+    fn repos_parse_with_stats_and_sort_keys() {
+        let entries = parse_repos(&repo_fixture()).unwrap();
+        assert_eq!(entries.len(), 3);
+
+        // The list row carries the stats and any state flags.
+        assert_eq!(entries[0].subtitle, "★5 ⑂9 !1 · Rust");
+        assert_eq!(entries[1].subtitle, "★50 ⑂2 !7 · — · private · fork");
+        assert_eq!(entries[2].subtitle, "★20 ⑂4 !3 · Go · archived");
+
+        // Sort keys are extracted, with a never-pushed repo keyed to 0.
+        let keys = entries[1].sort.as_ref().unwrap();
+        assert_eq!((keys.stars, keys.forks, keys.open_issues), (50, 2, 7));
+        assert!(keys.pushed > 0);
+        assert_eq!(entries[2].sort.as_ref().unwrap().pushed, 0);
+
+        // The details pane gets the full stat table.
+        let detail = &entries[0].detail;
+        for (k, want) in [("Stars", "5"), ("Forks", "9"), ("Open issues", "1")] {
+            assert!(
+                detail.iter().any(|(dk, dv)| dk == k && dv == want),
+                "missing {k}={want} in {detail:?}"
+            );
+        }
+        assert!(entries[2]
+            .detail
+            .iter()
+            .any(|(k, v)| k == "Pushed" && v == "never"));
+    }
+
+    #[test]
+    fn repo_sorts_order_by_each_key() {
+        let names = |entries: &[Entry]| {
+            entries.iter().map(|e| e.id.clone()).collect::<Vec<_>>()
+        };
+        let mut entries = parse_repos(&repo_fixture()).unwrap();
+
+        sort_repo_entries(&mut entries, RepoSort::Stars);
+        assert_eq!(names(&entries), ["octo/alpha", "octo/mid", "octo/zebra"]);
+        sort_repo_entries(&mut entries, RepoSort::Forks);
+        assert_eq!(names(&entries), ["octo/zebra", "octo/mid", "octo/alpha"]);
+        sort_repo_entries(&mut entries, RepoSort::OpenIssues);
+        assert_eq!(names(&entries), ["octo/alpha", "octo/mid", "octo/zebra"]);
+        sort_repo_entries(&mut entries, RepoSort::Name);
+        assert_eq!(names(&entries), ["octo/alpha", "octo/mid", "octo/zebra"]);
+        // Recency: the never-pushed repo sinks to the bottom.
+        sort_repo_entries(&mut entries, RepoSort::Pushed);
+        assert_eq!(names(&entries), ["octo/zebra", "octo/alpha", "octo/mid"]);
+    }
+
+    #[test]
+    fn cycling_sort_reorders_and_follows_the_selection() {
+        let cfg = GithubConfig {
+            sections: Some(vec!["repos".into()]),
+            ..Default::default()
+        };
+        let mut v = GithubView::new(Some(cfg));
+        assert_eq!(v.sections, vec![SectionKind::Repos]);
+        assert_eq!(v.repo_sort, RepoSort::Pushed);
+        v.entries[0] = parse_repos(&repo_fixture()).unwrap();
+        // Cursor on octo/mid (fetched order: zebra, alpha, mid).
+        v.states[0].select(Some(2));
+
+        v.cycle_repo_sort();
+        assert_eq!(v.repo_sort, RepoSort::Stars);
+        assert_eq!(v.entries[0][0].id, "octo/alpha", "stars order applied");
+        let followed = v.states[0].selected().unwrap();
+        assert_eq!(
+            v.entries[0][followed].id, "octo/mid",
+            "cursor follows the same repo through the re-sort"
+        );
+        assert!(v.status.contains("stars"));
+
+        // The full cycle wraps back around to the start.
+        for _ in 0..4 {
+            v.cycle_repo_sort();
+        }
+        assert_eq!(v.repo_sort, RepoSort::Pushed);
+    }
+
+    #[test]
+    fn sort_key_is_a_noop_hint_on_other_tabs() {
+        let cfg = GithubConfig {
+            sections: Some(vec!["gists".into()]),
+            ..Default::default()
+        };
+        let mut v = GithubView::new(Some(cfg));
+        let before = v.repo_sort;
+        v.cycle_repo_sort();
+        assert_eq!(v.repo_sort, before, "sort state untouched off the Repos tab");
+        assert!(v.status.contains("Repos tab"));
+    }
+
+    #[test]
+    fn fetched_repos_arrive_pre_sorted_by_the_active_order() {
+        let cfg = GithubConfig {
+            sections: Some(vec!["repos".into()]),
+            repo_sort: Some("stars".into()),
+            ..Default::default()
+        };
+        let mut v = GithubView::new(Some(cfg));
+        v.open();
+        // A worker delivers repos in fetch order; poll must store them
+        // in the user's chosen order.
+        v.tx.send(Msg::Section {
+            idx: 0,
+            gen: v.generation,
+            owner: None,
+            result: Ok(parse_repos(&repo_fixture()).unwrap()),
+        })
+        .unwrap();
+        v.poll();
+        assert_eq!(v.entries[0][0].id, "octo/alpha");
+        assert_eq!(v.entries[0][1].id, "octo/mid");
+        assert_eq!(v.entries[0][2].id, "octo/zebra");
     }
 
     #[test]

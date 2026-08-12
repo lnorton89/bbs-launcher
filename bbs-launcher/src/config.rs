@@ -43,9 +43,9 @@ pub struct BbsConfig {
 /// changed and the dashboard needs rebuilding.
 #[derive(Debug, Deserialize, Clone, Default, PartialEq)]
 pub struct GithubConfig {
-    /// Sections to show, in display order. Defaults to all six:
-    /// `notifications`, `pull_requests`, `issues`, `stars`, `gists`,
-    /// `profile`. Unknown names are ignored.
+    /// Sections to show, in display order. Defaults to all seven:
+    /// `notifications`, `pull_requests`, `issues`, `repos`, `stars`,
+    /// `gists`, `profile`. Unknown names are ignored.
     #[serde(default)]
     pub sections: Option<Vec<String>>,
     /// Max entries fetched per section (clamped to 1..=100). Default 25.
@@ -55,11 +55,16 @@ pub struct GithubConfig {
     /// (minimum 5). Default 120.
     #[serde(default)]
     pub refresh_secs: Option<u64>,
-    /// Repo affiliation filter for the Issues and Pull Requests sections:
-    /// comma-separated subset of `owner`, `collaborator` (write access),
-    /// `organization_member`. Default: all three.
+    /// Repo affiliation filter for the Issues, Pull Requests, and Repos
+    /// sections: comma-separated subset of `owner`, `collaborator`
+    /// (write access), `organization_member`. Default: all three.
     #[serde(default)]
     pub affiliation: Option<String>,
+    /// Starting sort order for the Repos section: `pushed` (default),
+    /// `stars`, `forks`, `issues`, or `name`. The `s` key cycles through
+    /// them while the tab is open.
+    #[serde(default)]
+    pub repo_sort: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

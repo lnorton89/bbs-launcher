@@ -32,7 +32,7 @@ bbs-launcher/src/
 - 🗂️ **Foldable categories** - Group items under collapsible headers
 - 📺 **Scrolling MOTD** - A marquee of your own messages under the banner
 - 📊 **Launch stats** - Remembers what you run and when
-- 🐙 **GitHub dashboard screen** - A built-in, customizable all-in-one view (notifications, PRs, issues, starred repos, gists, profile) reusing your `gh` login — no extra tokens to manage
+- 🐙 **GitHub dashboard screen** - A built-in, customizable all-in-one view (notifications, PRs, issues, your repos, starred repos, gists, profile) reusing your `gh` login — no extra tokens to manage. The Repos tab lists every repo you have access to with stars/forks/open-issue counts, sortable on the fly with `s`
 - 📺 **Complex menu items** - Items can open built-in screens instead of just running a command
 - 🖥️ **Cross-terminal ready** - Tested on Windows Terminal, with PowerShell/CMD/Tabby support
 

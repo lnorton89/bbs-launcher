@@ -127,9 +127,12 @@ color = "red"
 [github]
 # Sections shown, in order. Unknown names are ignored. Uncomment to
 # pick a subset:
-# sections = ["notifications", "pull_requests", "issues", "stars", "gists", "profile"]
+# sections = ["notifications", "pull_requests", "issues", "repos", "stars", "gists", "profile"]
 per_page = 25
 refresh_secs = 120
+# Starting sort for the Repos tab: pushed (default), stars, forks,
+# issues, or name. Press `s` on the tab to cycle through them live.
+# repo_sort = "pushed"
 # Repo affiliation for the Issues and Pull Requests sections: comma-
 # separated subset of owner, collaborator (write access), and
 # organization_member. Defaults to all three.

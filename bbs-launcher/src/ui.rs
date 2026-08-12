@@ -755,10 +755,14 @@ fn draw_github(frame: &mut Frame, app: &mut App) {
     apply_chase(frame, app, &[chunks[0], mid[0], mid[1]]);
 
     // ── footer: key hints ──
-    let hints = if app.github.sections[app.github.tab] == SectionKind::Notifications {
-        " ←/→ h/l tabs · ↑/↓ j/k move · r refresh · o open in browser · m mark read · q back "
-    } else {
-        " ←/→ h/l tabs · ↑/↓ j/k move · r refresh · o open in browser · q back "
+    let hints = match app.github.sections[app.github.tab] {
+        SectionKind::Notifications => {
+            " ←/→ h/l tabs · ↑/↓ j/k move · r refresh · o open in browser · m mark read · q back "
+        }
+        SectionKind::Repos => {
+            " ←/→ h/l tabs · ↑/↓ j/k move · s sort · r refresh · o open in browser · q back "
+        }
+        _ => " ←/→ h/l tabs · ↑/↓ j/k move · r refresh · o open in browser · q back ",
     };
     frame.render_widget(
         Paragraph::new(hints)
@@ -828,6 +832,17 @@ fn draw_github_list(frame: &mut Frame, area: Rect, app: &mut App) {
         (format!(" {}  loading… ", kind.label()), Color::Yellow)
     } else if app.github.errors[tab].is_some() {
         (format!(" {}  (failed — r to retry) ", kind.label()), Color::Red)
+    } else if kind == SectionKind::Repos {
+        // The repos list is sortable; show which order is active.
+        (
+            format!(
+                " {} ({}) · by {} ",
+                kind.label(),
+                items.len(),
+                app.github.repo_sort.label()
+            ),
+            accent,
+        )
     } else {
         (format!(" {} ({}) ", kind.label(), items.len()), accent)
     };
@@ -878,6 +893,12 @@ fn draw_github_details(frame: &mut Frame, area: Rect, app: &App) {
             let mut actions = vec!["  o — open in browser".to_string()];
             if app.github.sections[tab] == SectionKind::Notifications {
                 actions.push("  m — mark as read".to_string());
+            }
+            if app.github.sections[tab] == SectionKind::Repos {
+                actions.push(format!(
+                    "  s — cycle sort (now: {})",
+                    app.github.repo_sort.label()
+                ));
             }
             for a in actions {
                 lines.push(Line::from(Span::styled(
@@ -947,7 +968,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
         section("Screens"),
         entry("GitHub item", "opens the GitHub dashboard (screen = \"github\")"),
         entry("←/→ h/l", "switch dashboard tab"),
-        entry("o · m · r", "open · mark read · refresh"),
+        entry("o · m · r · s", "open · mark read · refresh · sort repos"),
         Line::default(),
         section("Config"),
         entry("bbs.toml", "theme · motd · items — live-reloads on save"),
@@ -1465,6 +1486,7 @@ mod tests {
             id: "#12".into(),
             url: Some("https://github.com/octo/app/pull/12".into()),
             detail: vec![("Repository".into(), "octo/app".into())],
+            sort: None,
         });
         app.github.states[tab].select(Some(0));
 
